@@ -2,88 +2,17 @@
 오늘 수집한 종목들의 D 점수 분포 확인 (7일 윈도우, 0~10점).
 bimodal / 변별력 부족 / 항목 통과율 편향 체크.
 
-데이터 소스:
-- 분봉: \\\\beelink\\market_data\\bars_1m\\stocks\\{code}\\{YYYY}\\{YYYYMM}.parquet (월 단위)
-  → 일자별 OHLCV로 groupby 집계해서 사용
-- 수집풀: D:\\Kiwoom_RtoB\\config\\data\\collection_pool.json
-
-환경변수로 경로 외부화 가능: MARKET_DATA_ROOT, COLLECTION_POOL_PATH
+데이터 소스 / 로더: tools/data_loaders.py
 """
-import json
 import os
 import sys
-from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sector.candle_quality import evaluate_candle_quality
-
-PROJECT_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-MARKET_DATA_ROOT = Path(os.environ.get('MARKET_DATA_ROOT', r'\\beelink\market_data'))
-COLLECTION_POOL = Path(os.environ.get(
-    'COLLECTION_POOL_PATH',
-    str(PROJECT_ROOT / 'config' / 'data' / 'collection_pool.json'),
-))
-
-
-def load_7d_bars(code: str, today: date | None = None) -> pd.DataFrame | None:
-    """
-    종목의 분봉 parquet(월 단위)을 읽어 최근 7거래일 일봉 OHLCV로 집계.
-    데이터 부족 시 None.
-    """
-    if today is None:
-        today = date.today()
-
-    # 최근 2개월 분봉이면 거래일 7일 충분히 커버
-    cur_month_first = today.replace(day=1)
-    prev_month_first = (cur_month_first - timedelta(days=1)).replace(day=1)
-    months = [prev_month_first, cur_month_first]
-
-    frames = []
-    for m in months:
-        p = MARKET_DATA_ROOT / 'bars_1m' / 'stocks' / code / f"{m.year}" / f"{m.year}{m.month:02d}.parquet"
-        if p.exists():
-            try:
-                frames.append(pd.read_parquet(p))
-            except Exception as e:
-                print(f"[load_7d_bars] {code} {p.name} 읽기 실패: {e}")
-
-    if not frames:
-        return None
-
-    df = pd.concat(frames, ignore_index=True)
-    df['dt'] = pd.to_datetime(df['dt'])
-    df['date'] = df['dt'].dt.date
-
-    daily = df.groupby('date').agg(
-        open=('open', 'first'),
-        high=('high', 'max'),
-        low=('low', 'min'),
-        close=('close', 'last'),
-        volume=('volume', 'sum'),
-    ).reset_index()
-
-    daily = daily[daily['date'] <= today]
-    daily = daily.sort_values('date').reset_index(drop=True)
-
-    if len(daily) < 7:
-        return None
-
-    return daily.tail(7).reset_index(drop=True)
-
-
-def load_today_pool_codes() -> list:
-    """수집풀에서 종목 코드 리스트 반환."""
-    if not COLLECTION_POOL.exists():
-        print(f"[수집풀 없음] {COLLECTION_POOL}")
-        return []
-    with COLLECTION_POOL.open('r', encoding='utf-8') as f:
-        pool = json.load(f)
-    if not isinstance(pool, dict):
-        return []
-    return list(pool.keys())
+from tools.data_loaders import load_today_pool_codes, load_7d_bars, PROJECT_ROOT
 
 
 def test_distribution(stock_codes: list, save_csv: bool = True):
