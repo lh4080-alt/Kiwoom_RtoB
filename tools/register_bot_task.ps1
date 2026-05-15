@@ -24,7 +24,8 @@ $WorkingDir = "$ProjectRoot\automation"
 schtasks /Delete /TN $TaskName /F 2>$null
 
 # cmd 래퍼로 stdout/stderr 리다이렉트
-$cmdArg = "/c `"`"$PythonExe`" $BotEntry >> `"$LogFile`" 2>&1`""
+# python -u: unbuffered stdout (redirect 시 block-buffering으로 로그 안 쌓이는 문제 방지)
+$cmdArg = "/c `"`"$PythonExe`" -u $BotEntry >> `"$LogFile`" 2>&1`""
 
 $action = New-ScheduledTaskAction `
     -Execute "cmd.exe" `
