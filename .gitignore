@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 데이터 (절대 push 금지)
+bar_storage/
+waiting_pool.db*
+*.parquet
+*.sqlite
+*.sqlite-journal
+*.db
+*.db-wal
+*.db-shm
+
+# 로그
+logs/
+*.log
+
+# 시크릿
+.env
+config/secrets.yml
+config/secrets.yaml
+*token*
+*key*
+
+# 분포 결과 CSV (재현 가능, repo 부풀림 방지)
+candle_quality_distribution.csv
+candle_quality_daily/
+candle_quality_master.csv
+
+# 임시 파일
+tmp/
+temp/
+*.bak
+
+# --- 프로젝트별 추가 보호선 (verify 단계에서 누락 발견 시 추가) ---
+# 시크릿 보강 (spec의 *token*/*key*가 못 잡는 패턴)
+*secret*
+*chat_id*
+
+# 봇 런타임 상태 (settings.json, last_held_stocks.json, collection_pool.json 등)
+config/data/
+
+# 코드 파일인데 광폭 패턴(*token*, *chat_id*)에 잘못 잡히는 케이스 — 예외 처리
+!automation/telegram/commands/token_manager.py
+!config-test/get_chat_id.py
