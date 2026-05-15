@@ -1,0 +1,10 @@
+# Kiwoom_RtoB 봇 외부 의존성 (코드 import 분석 결과 기반)
+#
+# 원본 봇:
+pandas>=2.0
+httpx>=0.25
+requests>=2.31
+websockets>=12.0
+
+# 추가 (sector/candle_quality, tools/data_loaders 등):
+pyarrow>=14.0          # parquet 읽기 (시장지수/분봉)

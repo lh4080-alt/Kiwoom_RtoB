@@ -107,12 +107,49 @@ def lookup_close(code: str, eval_date: str, offset_bdays: int):
     return None
 
 
+KOSPI_INDEX_CODE = '001'
+KOSDAQ_INDEX_CODE = '101'
+
+
 def load_market_change(eval_date: str) -> tuple:
     """
-    KOSPI/KOSDAQ 당일 등락률 반환.
+    eval_date 당일 KOSPI/KOSDAQ 등락률(%) 반환.
+    분봉 parquet의 당일 첫 'open' → 마지막 'close'로 계산.
 
-    TODO: 시장지수 로더 wire-up
-    후보: C:\\market_data_collector\\api\\index_chart.py (KOSPI '001', KOSDAQ '101' 또는 '201')
-    또는 \\beelink\\market_data\\bars_1m\\index\\{code}\\{YYYY}\\{YYYYMM}.parquet 직접 읽기.
+    Args:
+        eval_date: 'YYYY-MM-DD'
+
+    Returns:
+        (kospi_chg_pct, kosdaq_chg_pct)
+
+    Raises:
+        FileNotFoundError: 해당 월 parquet 없음
+        ValueError: 해당 일자 데이터 없음
     """
-    raise NotImplementedError('시장지수 로더 연결 필요 (C:\\market_data_collector\\api\\index_chart.py 참조)')
+    kospi_chg = _calc_index_change(KOSPI_INDEX_CODE, eval_date)
+    kosdaq_chg = _calc_index_change(KOSDAQ_INDEX_CODE, eval_date)
+    return kospi_chg, kosdaq_chg
+
+
+def _calc_index_change(index_code: str, eval_date: str) -> float:
+    """단일 지수의 당일 등락률 계산."""
+    d = datetime.strptime(eval_date, '%Y-%m-%d')
+    yyyy = d.strftime('%Y')
+    yyyymm = d.strftime('%Y%m')
+
+    parquet_path = MARKET_DATA_ROOT / 'bars_1m' / 'index' / index_code / yyyy / f'{yyyymm}.parquet'
+
+    if not parquet_path.exists():
+        raise FileNotFoundError(f'시장지수 parquet 없음: {parquet_path}')
+
+    df = pd.read_parquet(parquet_path)
+    df['_date'] = pd.to_datetime(df['dt']).dt.strftime('%Y-%m-%d')
+    day_df = df[df['_date'] == eval_date].sort_values('dt')
+
+    if len(day_df) == 0:
+        raise ValueError(f'{eval_date} 데이터 없음 in {parquet_path}')
+
+    open_price = float(day_df.iloc[0]['open'])
+    close_price = float(day_df.iloc[-1]['close'])
+
+    return (close_price - open_price) / open_price * 100
