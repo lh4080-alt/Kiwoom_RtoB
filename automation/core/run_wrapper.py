@@ -27,7 +27,11 @@ if __name__ == '__main__':
 	import sys
 
 	# 봇 logging 설정 (KST 시각 + httpx/httpcore 음소거)
-	sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+	# sys.path: automation/ (기존 봇 import용) + 프로젝트 루트 (신규 sector/ 모듈 import용)
+	_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+	_AUTOMATION = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+	sys.path.insert(0, _AUTOMATION)
+	sys.path.insert(0, _ROOT)
 	from core.logging_config import setup_logging
 	setup_logging()
 

@@ -299,7 +299,13 @@ class MainApp:
 		
 		# 프로그램 시작 시 start 메뉴 전송
 		await show_start_menu()
-		
+
+		# 풀 모니터 일별 리셋 task 시작 (09:00마다 매수 카운터 reset)
+		try:
+			self.chat_command.pool_monitor.start_daily_reset_loop()
+		except Exception as e:
+			print(f"pool_monitor daily reset loop 시작 실패: {e}")
+
 		try:
 			while self.keep_running:
 				# 채팅 메시지 확인

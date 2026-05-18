@@ -85,6 +85,12 @@ class ChatCommand:
 		from telegram.commands.reserve_command import get_scheduler
 		# 스케줄러는 나중에 process_command에서 process_command_callback이 설정될 때 함께 업데이트됨
 		self._reserve_scheduler = None
+
+		# 풀 모니터 초기화 (1차/2차 풀 + 매수 결정)
+		from sector.pool_monitor import PoolMonitor, set_monitor
+		self.pool_monitor = PoolMonitor(self.websocket)
+		set_monitor(self.pool_monitor)
+		self.websocket.pool_monitor = self.pool_monitor  # _handle_stock_quote dispatch용
 	
 	async def _reconnect_with_retry(self, was_feature_1_active: bool):
 		"""연결 끊김 이후 토큰 발급/웹소켓 재연결을 재시도합니다."""

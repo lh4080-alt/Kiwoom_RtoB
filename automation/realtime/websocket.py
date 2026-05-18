@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import utils.config as config
 from utils.collection_pool import add_to_pool
+from sector.pool_monitor import evaluate_and_add as pool_evaluate_and_add
 from utils.get_setting import get_setting, cached_setting
 from api.login import fn_au10001 as get_token
 from api.acc_val import fn_kt00004
@@ -502,6 +503,7 @@ class UnifiedWebSocket:
 											self.processing_stocks.add(jmcode)
 											seq_str = str(current_seq) if current_seq is not None else None
 											asyncio.create_task(self._safe_add_to_pool(jmcode, seq_id=seq_str))
+											asyncio.create_task(pool_evaluate_and_add(jmcode))
 											await asyncio.sleep(1)
 											
 											# 조건식 정보 출력
