@@ -28,6 +28,10 @@ from utils.blocklist_checker import is_blocked, is_in_grid_trading, is_in_wave_t
 from utils.market_hour import MarketHour
 from utils.stock_code_normalizer import normalize_stock_code
 
+import logging
+logger = logging.getLogger(__name__)
+
+
 def _to_int(value, default: int = 0) -> int:
 	"""API 응답 값(문자열/숫자/None)을 안전하게 int로 변환."""
 	try:
@@ -1886,6 +1890,9 @@ class UnifiedWebSocket:
 
 	async def _handle_stock_quote(self, response):
 		"""0B (주식체결) 메시지 처리: 현재가 감시 및 매도/매수 판단"""
+		# === 임시 디버그: 0B raw values dump (체결강도 FID 식별용, 검증 후 제거) ===
+		logger.info(f"[DEBUG-FID] 0B raw: {response}")
+
 		if not (self.feature_2_active or self.feature_5_active or self.feature_6_active):
 			return
 		
