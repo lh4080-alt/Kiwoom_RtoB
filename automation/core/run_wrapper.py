@@ -24,11 +24,22 @@ ssl.create_default_context = create_unverified_ssl_context
 if __name__ == '__main__':
 	import runpy
 	import os
-	
+	import logging
+	import sys
+
+	# 신규 모듈용 logging 설정 — StreamHandler만 사용
+	# (stdout은 Task Scheduler의 cmd 래퍼에서 bot.log로 redirect되므로 FileHandler 중복 회피)
+	logging.basicConfig(
+		level=logging.INFO,
+		format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+		handlers=[logging.StreamHandler(sys.stdout)],
+		force=True,
+	)
+
 	# 현재 스크립트의 디렉토리로 이동
 	script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 	os.chdir(script_dir)
-	
+
 	# main.py를 실행 (runpy를 사용하여 __main__ 모듈로 실행)
 	runpy.run_path('core/main.py', run_name='__main__')
 
