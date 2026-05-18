@@ -80,3 +80,14 @@ async def add_to_pool(stk_cd, condition_name=None, seq_id=None):
 def get_pool() -> dict:
 	"""현재 수집풀 전체를 반환 (필터링/조회용)."""
 	return _load()
+
+
+def clear_pool() -> int:
+	"""
+	수집풀을 빈 dict로 초기화. 비워진 종목 수 반환.
+	동기 호출 가정 (장 마감 후 daily_quality_logger에서만 호출됨).
+	"""
+	pool = _load()
+	count = len(pool)
+	_save({})
+	return count

@@ -17,10 +17,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sector.candle_quality import evaluate_candle_quality
 from tools.data_loaders import (
     load_today_pool_codes,
+    load_today_pool_full,
     load_7d_bars,
     lookup_close,
     load_market_change,
 )
+# automation/utils 패키지 경로 추가 (sys.path 위에서 PROJECT_ROOT 추가됨)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'automation'))
+from utils.collection_pool import clear_pool
 
 
 DAILY_DIR = Path('candle_quality_daily')
@@ -29,7 +33,8 @@ MASTER_CSV = Path('candle_quality_master.csv')
 
 def evaluate_today_pool(eval_date: str) -> pd.DataFrame:
     """오늘 수집한 종목 평가 + 시장 상태 기록."""
-    codes = load_today_pool_codes()
+    pool = load_today_pool_full()
+    codes = list(pool.keys())
     kospi_chg, kosdaq_chg = load_market_change(eval_date)
 
     results = []
@@ -39,6 +44,7 @@ def evaluate_today_pool(eval_date: str) -> pd.DataFrame:
             continue
         r = evaluate_candle_quality(bars)
         today_close = bars.iloc[-1]['close']
+        pool_entry = pool.get(code, {})
 
         row = {
             'eval_date': eval_date,
@@ -48,6 +54,10 @@ def evaluate_today_pool(eval_date: str) -> pd.DataFrame:
             'pullback_pct': r['pullback_depth_pct'],
             'bullish_ratio': r['bullish_ratio'],
             'avg_wick': r['avg_upper_wick'],
+            'hit_count': int(pool_entry.get('hit_count', 0)),  # 풀에서 그날 매칭 횟수
+            'first_seen': pool_entry.get('first_seen'),
+            'last_seen': pool_entry.get('last_seen'),
+            'seq_ids': ','.join(pool_entry.get('seq_ids', [])),
             'kospi_chg': kospi_chg,
             'kosdaq_chg': kosdaq_chg,
             'eval_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -119,7 +129,7 @@ if __name__ == '__main__':
     DAILY_DIR.mkdir(exist_ok=True)
     today = datetime.now().strftime('%Y-%m-%d')
 
-    # 1. 오늘 평가
+    # 1. 오늘 평가 + daily CSV 저장 (DB 역할)
     evaluate_today_pool(today)
 
     # 2. 과거 데이터 수익률 채우기
@@ -127,3 +137,10 @@ if __name__ == '__main__':
 
     # 3. 마스터 재구성
     rebuild_master()
+
+    # 4. 수집풀 초기화 — daily CSV에 평가 결과가 영구 보존됐으므로 풀은 비워서 다음 거래일을 빈 상태로 시작
+    try:
+        cleared = clear_pool()
+        print(f"[수집풀] {cleared}종목 비움 → 다음 거래일 빈 풀로 시작")
+    except Exception as e:
+        print(f"[수집풀] 비우기 실패: {type(e).__name__}: {e}")

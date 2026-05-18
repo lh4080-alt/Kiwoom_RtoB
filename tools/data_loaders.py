@@ -36,6 +36,72 @@ def load_today_pool_codes() -> list:
     return list(pool.keys())
 
 
+def load_today_pool_full() -> dict:
+    """수집풀 JSON 전체(코드→엔트리 dict) 반환. hit_count 등 메타데이터 필요한 경우."""
+    if not COLLECTION_POOL.exists():
+        return {}
+    with COLLECTION_POOL.open('r', encoding='utf-8') as f:
+        pool = json.load(f)
+    return pool if isinstance(pool, dict) else {}
+
+
+def lookup_history(code: str, days: int = 30) -> dict:
+    """
+    종목이 최근 days일 내 candle_quality_daily/*.csv 파일들에 등장한 이력 조회.
+    필터링 단계에서 가산점 부여 등에 사용.
+
+    Returns:
+        {
+            'appearances': int,           # 등장 횟수
+            'last_seen_date': str | None,
+            'dates': list[str],           # 등장한 일자들 (오름차순)
+            'history': list[dict],        # [{date, score, hit_count}, ...]
+        }
+    """
+    daily_dir = PROJECT_ROOT / 'candle_quality_daily'
+    if not daily_dir.exists():
+        return {'appearances': 0, 'last_seen_date': None, 'dates': [], 'history': []}
+
+    today = date.today()
+    cutoff = today - timedelta(days=days)
+    code_norm = str(code).zfill(6)
+
+    history = []
+    for csv_path in sorted(daily_dir.glob('*.csv')):
+        try:
+            file_date = datetime.strptime(csv_path.stem, '%Y-%m-%d').date()
+        except ValueError:
+            continue
+        if file_date < cutoff or file_date > today:
+            continue
+        try:
+            df = pd.read_csv(csv_path)
+        except Exception:
+            continue
+        if 'code' not in df.columns:
+            continue
+        df['_code'] = df['code'].astype(str).str.zfill(6)
+        row = df[df['_code'] == code_norm]
+        if row.empty:
+            continue
+        r = row.iloc[0]
+        history.append({
+            'date': csv_path.stem,
+            'score': int(r['score']) if pd.notna(r.get('score')) else None,
+            'hit_count': int(r['hit_count']) if 'hit_count' in df.columns and pd.notna(r.get('hit_count')) else None,
+        })
+
+    if not history:
+        return {'appearances': 0, 'last_seen_date': None, 'dates': [], 'history': []}
+
+    return {
+        'appearances': len(history),
+        'last_seen_date': history[-1]['date'],
+        'dates': [h['date'] for h in history],
+        'history': history,
+    }
+
+
 def load_7d_bars(code: str, end_date=None) -> pd.DataFrame | None:
     """
     종목의 분봉 parquet(월 단위)을 읽어 end_date까지의 최근 7거래일 일봉 OHLCV로 집계.
