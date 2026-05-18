@@ -104,8 +104,11 @@ def lookup_history(code: str, days: int = 30) -> dict:
 
 def load_7d_bars(code: str, end_date=None) -> pd.DataFrame | None:
     """
-    종목의 분봉 parquet(월 단위)을 읽어 end_date까지의 최근 7거래일 일봉 OHLCV로 집계.
+    종목의 일봉 parquet에서 end_date까지의 최근 7거래일 OHLCV 반환.
     데이터 부족 시 None.
+
+    경로: \\\\beelink\\market_data\\bars_1d\\stocks\\{code}\\{YYYY}.parquet
+    1분봉 집계가 아니라 일봉 직접 read — 매 호출 1파일 ~수십 행만 read해서 매우 가볍다.
 
     Args:
         code: 6자리 종목코드
@@ -118,14 +121,14 @@ def load_7d_bars(code: str, end_date=None) -> pd.DataFrame | None:
     elif isinstance(end_date, datetime):
         end_date = end_date.date()
 
-    # 최근 2개월 분봉으로 거래일 7일 확보
-    cur_month_first = end_date.replace(day=1)
-    prev_month_first = (cur_month_first - timedelta(days=1)).replace(day=1)
-    months = [prev_month_first, cur_month_first]
+    # 일봉은 연도별 1파일. 7거래일 확보 위해 연초엔 전년도 파일도 읽는다.
+    years = [end_date.year]
+    if end_date.month == 1 and end_date.day <= 14:
+        years.insert(0, end_date.year - 1)
 
     frames = []
-    for m in months:
-        p = MARKET_DATA_ROOT / 'bars_1m' / 'stocks' / code / f"{m.year}" / f"{m.year}{m.month:02d}.parquet"
+    for y in years:
+        p = MARKET_DATA_ROOT / 'bars_1d' / 'stocks' / code / f"{y}.parquet"
         if p.exists():
             try:
                 frames.append(pd.read_parquet(p))
@@ -136,24 +139,14 @@ def load_7d_bars(code: str, end_date=None) -> pd.DataFrame | None:
         return None
 
     df = pd.concat(frames, ignore_index=True)
-    df['dt'] = pd.to_datetime(df['dt'])
-    df['date'] = df['dt'].dt.date
+    df['date'] = pd.to_datetime(df['dt']).dt.date
+    df = df[df['date'] <= end_date].sort_values('date').reset_index(drop=True)
 
-    daily = df.groupby('date').agg(
-        open=('open', 'first'),
-        high=('high', 'max'),
-        low=('low', 'min'),
-        close=('close', 'last'),
-        volume=('volume', 'sum'),
-    ).reset_index()
-
-    daily = daily[daily['date'] <= end_date]
-    daily = daily.sort_values('date').reset_index(drop=True)
-
-    if len(daily) < 7:
+    if len(df) < 7:
         return None
 
-    return daily.tail(7).reset_index(drop=True)
+    # 기존 시그니처 컬럼만 반환 (evaluate_candle_quality 호환)
+    return df[['date', 'open', 'high', 'low', 'close', 'volume']].tail(7).reset_index(drop=True)
 
 
 def lookup_close(code: str, eval_date: str, offset_bdays: int):
