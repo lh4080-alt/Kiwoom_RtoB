@@ -244,9 +244,10 @@ class DailyAnalyzer:
 		except Exception:
 			logger.exception(f"ka10046 호출 실패 {code}")
 
-		# 외인/기관 일별 5일치 (ka10059)
+		# 외인/기관 일별 5일치 + 거래량비 (ka10059)
 		frgnr_today = orgn_today = ind_today = 0
 		frgnr_streak = orgn_streak = 0
+		vol_ratio: Optional[float] = None
 		try:
 			data = await fn_ka10059(code, token, dt_yyyymmdd)
 			if data.get('return_code') == 0:
@@ -260,6 +261,14 @@ class DailyAnalyzer:
 					ind_today = ind_values[0]
 					frgnr_streak = _calc_streak(frgnr_values)
 					orgn_streak = _calc_streak(orgn_values)
+					# 거래량비: acc_trde_qty (주 단위) today vs prev 4일 평균
+					vols = [_parse_kiwoom_signed(it.get('acc_trde_qty', '')) for it in items]
+					if len(vols) >= 2:
+						prev_vols = [v for v in vols[1:] if v > 0]
+						if prev_vols:
+							avg_prev = sum(prev_vols) / len(prev_vols)
+							if avg_prev > 0:
+								vol_ratio = vols[0] / avg_prev * 100
 		except Exception:
 			logger.exception(f"ka10059 호출 실패 {code}")
 
@@ -284,9 +293,9 @@ class DailyAnalyzer:
 			# 'today_close': today_close,
 			# 'today_chg_pct': chg_pct,
 			# 'today_vol': int(today_vol),
-			# 'volume_ratio': vol_ratio,
 			# 'is_bullish': is_bullish,
 			# 'close_pos': close_pos,
+			'volume_ratio': vol_ratio,  # ka10059 acc_trde_qty 기반 (일봉 의존 X)
 			'hit_count': pool_entry.get('hit_count', 0),
 			'seq_ids': pool_entry.get('seq_ids', []),
 			'cntr_str_5min': cntr_str_5min,
@@ -323,14 +332,14 @@ class DailyAnalyzer:
 	def _format_telegram(self, results: list, market: dict, today: str) -> list:
 		"""분석 결과 → 텔레그램 메시지 (길면 여러 건으로 분할).
 
-		정렬: 체결강도 5분 ↓ → 외인 streak |abs| ↓ → 프로그램 streak |abs| ↓
-		(거래량비 정렬은 [폐기] 일봉 의존이라 제거)
+		정렬: 체결강도 5분 ↓ → 외인 streak |abs| ↓ → 거래량비 ↓
+		(거래량비는 ka10059 acc_trde_qty 기반 — 일봉 의존 X)
 		"""
 		def sort_key(r):
 			return (
 				-((r.get('cntr_str_5min') or 0)),
 				-abs(r.get('frgnr_streak') or 0),
-				-abs(r.get('prm_streak') or 0),
+				-((r.get('volume_ratio') or 0)),
 			)
 
 		valid = [r for r in results if 'error' not in r]
@@ -382,17 +391,18 @@ class DailyAnalyzer:
 		return messages
 
 	def _format_one(self, r: dict) -> str:
-		"""종목 1건 포맷 — 체결강도/외인기관/프로그램 (일봉 의존 부분 [폐기])."""
+		"""종목 1건 포맷 — 체결강도/외인기관/프로그램 + 거래량비 (일봉 의존 부분 [폐기])."""
 		# [폐기] 일봉 의존 변수:
 		# chg = r.get('today_chg_pct') or 0
 		# chg_sym = '🟥' if chg > 0 else '🟦' if chg < 0 else '⬜'
 		# bull = '🟢' if r.get('is_bullish') else '🔴'
 		# close = int(r.get('today_close') or 0)
-		# vol_ratio = r.get('volume_ratio') or 0
 		name = r.get('name') or '-'
 		code = r.get('code', '-')
 		cntr_str = r.get('cntr_str_5min')
 		cntr_str_s = f"{cntr_str:.0f}" if cntr_str is not None else "-"
+		vol_ratio = r.get('volume_ratio')
+		vol_ratio_s = f"{vol_ratio:.0f}%" if vol_ratio is not None else "-"
 
 		highlight = ''
 		if (r.get('frgnr_streak') or 0) >= FRGNR_STREAK_HIGHLIGHT:
@@ -414,7 +424,7 @@ class DailyAnalyzer:
 
 		return (
 			f"📍 {name} ({code}){highlight}\n"
-			f"   📊 체결강도 {cntr_str_s}\n"
+			f"   📊 거래량비 {vol_ratio_s} / 체결강도 {cntr_str_s}\n"
 			f"   💰 외인 {fmt_streak(r.get('frgnr_streak') or 0)} / "
 			f"기관 {fmt_streak(r.get('orgn_streak') or 0)} / "
 			f"프로그램 {fmt_streak(r.get('prm_streak') or 0)}\n"
