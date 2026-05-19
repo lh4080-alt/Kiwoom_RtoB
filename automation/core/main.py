@@ -304,13 +304,7 @@ class MainApp:
 		# 프로그램 시작 시 start 메뉴 전송
 		await show_start_menu()
 
-		# 풀 모니터 일별 리셋 task 시작 (09:00마다 매수 카운터 reset)
-		try:
-			self.chat_command.pool_monitor.start_daily_reset_loop()
-		except Exception as e:
-			print(f"pool_monitor daily reset loop 시작 실패: {e}")
-
-		# Daily task 시작 (매일 16:30 평가 + master 재구성 + collection_pool 비우기)
+		# Daily task 시작 (매일 16:00 daily_analyzer + collection_pool 비우기)
 		try:
 			self.chat_command.daily_task.start()
 		except Exception as e:

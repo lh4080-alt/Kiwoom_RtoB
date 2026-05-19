@@ -1,13 +1,10 @@
 """
 봇 내부 daily task.
-매일 16:30 KST에 1회 실행:
-  1. 오늘 풀 종목 D-score 평가 (daily CSV 저장)
-  2. 과거 데이터 익일/5일 수익률 backfill
-  3. master CSV 재구성
-  4. collection_pool 비우기
+매일 16:00 KST에 1회 실행:
+  1. (예정) daily_analyzer — 수집풀 종목 자동 분석 + 텔레그램 알림
+  2. collection_pool 비우기
 
-기존 tools/daily_quality_logger.py 로직을 봇 내부 task로 통합.
-별도 프로세스로 실행 금지 (영구 원칙 — 외부 프로세스 데이터 조작 금지).
+영구 원칙: 외부 프로세스 데이터 조작 금지 — 봇 내부에서만 처리.
 """
 import asyncio
 import logging
@@ -17,7 +14,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 DAILY_TASK_HOUR = 16
-DAILY_TASK_MINUTE = 30
+DAILY_TASK_MINUTE = 0
 RESET_HOUR = 0  # 자정 0시대에 daily_done_today flag 리셋
 
 
@@ -25,7 +22,7 @@ class DailyTaskManager:
 	"""봇 내부 daily task 스케줄러."""
 
 	def __init__(self, bot_ref):
-		"""bot_ref: ChatCommand 또는 봇 인스턴스 (현재 미사용, 향후 확장 대비)."""
+		"""bot_ref: ChatCommand 또는 봇 인스턴스 (daily_analyzer 호출용으로 향후 사용)."""
 		self.bot = bot_ref
 		self._daily_done_today = False
 		self._task: Optional[asyncio.Task] = None
@@ -43,7 +40,7 @@ class DailyTaskManager:
 			logger.info("DailyTaskManager stopped")
 
 	async def _scheduler_loop(self):
-		"""30초 간격으로 16:30 도래 + 자정 리셋 체크."""
+		"""30초 간격으로 16:00 도래 + 자정 리셋 체크."""
 		while True:
 			try:
 				await self._check_and_run()
@@ -63,7 +60,7 @@ class DailyTaskManager:
 			logger.info("daily_done flag reset at midnight")
 			return
 
-		# 16:30 도달 + 오늘 미실행
+		# 16:00 도달 + 오늘 미실행
 		if now.hour == DAILY_TASK_HOUR and now.minute >= DAILY_TASK_MINUTE and not self._daily_done_today:
 			logger.info(f"daily task triggered at {now.strftime('%H:%M:%S')}")
 			await self._run_daily_task()
@@ -71,28 +68,15 @@ class DailyTaskManager:
 			self._daily_done_today = True
 
 	async def _run_daily_task(self):
-		"""평가 → backfill → master → reset 순서. 절대 역순 금지."""
+		"""16:00 후처리. 현재는 수집풀 비우기만. daily_analyzer 통합 예정."""
 		today = datetime.now().strftime('%Y-%m-%d')
 		loop = asyncio.get_event_loop()
 
 		try:
-			# 1. 오늘 풀 평가 (기존 tools/daily_quality_logger.evaluate_today_pool)
-			logger.info(f"[daily 1/4] evaluating today's pool: {today}")
-			from tools.daily_quality_logger import evaluate_today_pool
-			await loop.run_in_executor(None, evaluate_today_pool, today)
+			# TODO: daily_analyzer 통합 — 수집풀 종목 자동 분석 + 텔레그램 알림
+			# (현재는 수집풀 비우기만 수행. 분석은 daily_analyzer.py 작성 시 추가)
 
-			# 2. 과거 수익률 backfill
-			logger.info("[daily 2/4] backfilling returns")
-			from tools.daily_quality_logger import backfill_returns
-			await loop.run_in_executor(None, backfill_returns, today)
-
-			# 3. master CSV 재구성
-			logger.info("[daily 3/4] rebuilding master")
-			from tools.daily_quality_logger import rebuild_master
-			await loop.run_in_executor(None, rebuild_master)
-
-			# 4. collection_pool 비우기 (마지막. 평가 데이터 영구 보존 후 비움)
-			logger.info("[daily 4/4] clearing collection_pool")
+			logger.info("[daily] clearing collection_pool")
 			from utils.collection_pool import clear_pool
 			cleared = await loop.run_in_executor(None, clear_pool)
 			logger.info(f"collection_pool cleared: {cleared} entries")
@@ -100,4 +84,3 @@ class DailyTaskManager:
 			logger.info(f"daily task completed for {today}")
 		except Exception:
 			logger.exception("daily task failed (will not retry until tomorrow)")
-

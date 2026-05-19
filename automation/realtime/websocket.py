@@ -12,7 +12,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import utils.config as config
 from utils.collection_pool import add_to_pool
-from sector.pool_monitor import evaluate_and_add as pool_evaluate_and_add
 from utils.get_setting import get_setting, cached_setting
 from api.login import fn_au10001 as get_token
 from api.acc_val import fn_kt00004
@@ -400,7 +399,6 @@ class UnifiedWebSocket:
 									continue
 								self.processing_stocks.add(code)
 								asyncio.create_task(self._safe_add_to_pool(code, seq_id=seq_str))
-								asyncio.create_task(pool_evaluate_and_add(code))
 						else:
 							print(f'✅ 조건식 등록 성공 (seq: {seq}) - 초기 스냅샷 없음')
 							await tel_send(f'📊 조건식 등록 (seq={seq}) - 초기 스냅샷 없음')
@@ -517,11 +515,10 @@ class UnifiedWebSocket:
 												print(f"⏳ {jmcode}: 이미 처리 중이므로 매수 신호를 무시합니다.")
 												continue
 											
-											# 처리 시작 표시 후, 안전 래퍼로 매수 로직 실행
+											# 처리 시작 표시 후, 안전 래퍼로 수집풀 적재
 											self.processing_stocks.add(jmcode)
 											seq_str = str(current_seq) if current_seq is not None else None
 											asyncio.create_task(self._safe_add_to_pool(jmcode, seq_id=seq_str))
-											asyncio.create_task(pool_evaluate_and_add(jmcode))
 											await asyncio.sleep(1)
 											
 											# 조건식 정보 출력
@@ -1909,25 +1906,7 @@ class UnifiedWebSocket:
 			print(f"잔고 동기화 태스크 오류: {e}")
 
 	async def _handle_stock_quote(self, response):
-		"""0B (주식체결) 메시지 처리: 현재가 감시 및 매도/매수 판단 + pool_monitor dispatch"""
-		# pool_monitor가 부착돼 있으면 0B push 데이터를 1차/2차 풀 모니터링용으로 전달
-		# (feature 활성화 무관 — 풀 모니터링은 독립 흐름)
-		if hasattr(self, 'pool_monitor') and self.pool_monitor is not None:
-			try:
-				code = response.get('item', '')
-				if isinstance(code, list):
-					code = code[0] if code else ''
-				v = response.get('values', {})
-				if code and v:
-					price = abs(float(str(v.get('10', '0')).replace('+', '').replace('-', '') or '0'))
-					strength = float(v.get('228', 0) or 0)  # 체결강도 (PDF Sec47 p.477)
-					volume = abs(int(str(v.get('15', '0')).replace('+', '').replace('-', '') or '0'))
-					session = str(v.get('290', ''))  # 장구분 (2=정규장)
-					if session == '2':
-						self.pool_monitor.on_quote(code, price, strength, volume)
-			except Exception:
-				logger.exception('pool_monitor dispatch error')
-
+		"""0B (주식체결) 메시지 처리: 현재가 감시 및 매도/매수 판단"""
 		if not (self.feature_2_active or self.feature_5_active or self.feature_6_active):
 			return
 		

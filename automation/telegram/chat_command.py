@@ -86,13 +86,7 @@ class ChatCommand:
 		# 스케줄러는 나중에 process_command에서 process_command_callback이 설정될 때 함께 업데이트됨
 		self._reserve_scheduler = None
 
-		# 풀 모니터 초기화 (1차/2차 풀 + 매수 결정)
-		from sector.pool_monitor import PoolMonitor, set_monitor
-		self.pool_monitor = PoolMonitor(self.websocket)
-		set_monitor(self.pool_monitor)
-		self.websocket.pool_monitor = self.pool_monitor  # _handle_stock_quote dispatch용
-
-		# Daily task (매일 16:30 평가 + master 재구성 + collection_pool 비우기)
+		# Daily task (매일 16:00 daily_analyzer + collection_pool 비우기)
 		# 영구 원칙: 외부 프로세스 데이터 조작 금지 — 봇 내부에서만 처리.
 		from core.daily_task import DailyTaskManager
 		self.daily_task = DailyTaskManager(self)

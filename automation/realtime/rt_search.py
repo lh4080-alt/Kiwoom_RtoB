@@ -10,7 +10,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.config import socket_url
 from utils.collection_pool import add_to_pool
-from sector.pool_monitor import evaluate_and_add as pool_evaluate_and_add
 from utils.get_setting import get_setting
 from api.login import fn_au10001 as get_token
 
@@ -146,9 +145,8 @@ class RealTimeSearch:
 									# 조건식 이름 가져오기
 									condition_name = valid_sequences.get(seq_str) if valid_sequences else None
 									
-									# 조건검색 매칭 종목을 수집풀에 적재 (매수 안 함) + D-score 임계(D_SCORE_MIN) 통과 시 1차 풀 진입
+									# 조건검색 매칭 종목을 수집풀에 적재 (매수 안 함). 16:00 daily_analyzer에서 후처리.
 									asyncio.create_task(add_to_pool(jmcode, condition_name, seq_id=seq_str))
-									asyncio.create_task(pool_evaluate_and_add(jmcode))
 									
 								except Exception as e:
 									print(f"⚠️ 항목 처리 중 오류 발생: {e}")

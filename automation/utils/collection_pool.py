@@ -113,7 +113,7 @@ def get_pool() -> dict:
 def clear_pool() -> int:
 	"""
 	수집풀을 빈 dict로 초기화. 비워진 종목 수 반환.
-	동기 호출 가정 (장 마감 후 daily_quality_logger에서만 호출됨).
+	동기 호출 가정. 봇 내부 daily_task / startup에서만 호출 (영구 원칙 — 외부 조작 금지).
 	"""
 	pool = _load()
 	count = len(pool)
