@@ -193,8 +193,8 @@ class DailyAnalyzer:
 	# 종목별 정보 수집
 	# ─────────────────────────────────────────────────────────
 	async def _gather_stock_info(self, code: str, pool_entry: dict, token: str, dt_yyyymmdd: str) -> dict:
-		"""단일 종목 정보 — 일봉 + 체결강도 + 외인기관 + 프로그램매매."""
-		from tools.data_loaders import load_7d_bars
+		"""단일 종목 정보 — 체결강도 + 외인기관 + 프로그램매매."""
+		# from tools.data_loaders import load_7d_bars  # [폐기] 일봉 의존 로직 비활성
 		from utils.collection_pool import get_stock_name
 		from api.stk_strength import fn_ka10046
 		from api.inv_trade_trend import fn_ka10059
@@ -202,34 +202,36 @@ class DailyAnalyzer:
 
 		name = await get_stock_name(code)
 
-		bars = load_7d_bars(code)
-		if bars is None or len(bars) < 2:
-			return {
-				'code': code,
-				'name': name,
-				'error': 'no_bars',
-				'hit_count': pool_entry.get('hit_count', 0),
-				'seq_ids': pool_entry.get('seq_ids', []),
-			}
-
-		today_row = bars.iloc[-1]
-		prev_row = bars.iloc[-2]
-
-		today_close = float(today_row['close'])
-		prev_close = float(prev_row['close'])
-		chg_pct = ((today_close - prev_close) / prev_close * 100) if prev_close else 0.0
-
-		today_vol = float(today_row['volume'])
-		prev_vols = bars.iloc[:-1]['volume'].astype(float).tolist()
-		avg_vol = sum(prev_vols) / len(prev_vols) if prev_vols else 0.0
-		vol_ratio = (today_vol / avg_vol * 100) if avg_vol else 0.0
-
-		today_open = float(today_row['open'])
-		today_high = float(today_row['high'])
-		today_low = float(today_row['low'])
-		is_bullish = today_close > today_open
-		rng = today_high - today_low
-		close_pos = ((today_close - today_low) / rng * 100) if rng else 50.0
+		# === [폐기] 일봉 의존 (등락률/거래량비/양음봉/종가위치) ===
+		# bars = load_7d_bars(code)
+		# if bars is None or len(bars) < 2:
+		# 	return {
+		# 		'code': code,
+		# 		'name': name,
+		# 		'error': 'no_bars',
+		# 		'hit_count': pool_entry.get('hit_count', 0),
+		# 		'seq_ids': pool_entry.get('seq_ids', []),
+		# 	}
+		#
+		# today_row = bars.iloc[-1]
+		# prev_row = bars.iloc[-2]
+		#
+		# today_close = float(today_row['close'])
+		# prev_close = float(prev_row['close'])
+		# chg_pct = ((today_close - prev_close) / prev_close * 100) if prev_close else 0.0
+		#
+		# today_vol = float(today_row['volume'])
+		# prev_vols = bars.iloc[:-1]['volume'].astype(float).tolist()
+		# avg_vol = sum(prev_vols) / len(prev_vols) if prev_vols else 0.0
+		# vol_ratio = (today_vol / avg_vol * 100) if avg_vol else 0.0
+		#
+		# today_open = float(today_row['open'])
+		# today_high = float(today_row['high'])
+		# today_low = float(today_row['low'])
+		# is_bullish = today_close > today_open
+		# rng = today_high - today_low
+		# close_pos = ((today_close - today_low) / rng * 100) if rng else 50.0
+		# === [폐기 끝] ===
 
 		# 체결강도 (ka10046)
 		cntr_str_5min: Optional[float] = None
@@ -278,12 +280,13 @@ class DailyAnalyzer:
 		return {
 			'code': code,
 			'name': name,
-			'today_close': today_close,
-			'today_chg_pct': chg_pct,
-			'today_vol': int(today_vol),
-			'volume_ratio': vol_ratio,
-			'is_bullish': is_bullish,
-			'close_pos': close_pos,
+			# [폐기] 일봉 의존 필드:
+			# 'today_close': today_close,
+			# 'today_chg_pct': chg_pct,
+			# 'today_vol': int(today_vol),
+			# 'volume_ratio': vol_ratio,
+			# 'is_bullish': is_bullish,
+			# 'close_pos': close_pos,
 			'hit_count': pool_entry.get('hit_count', 0),
 			'seq_ids': pool_entry.get('seq_ids', []),
 			'cntr_str_5min': cntr_str_5min,
@@ -320,13 +323,14 @@ class DailyAnalyzer:
 	def _format_telegram(self, results: list, market: dict, today: str) -> list:
 		"""분석 결과 → 텔레그램 메시지 (길면 여러 건으로 분할).
 
-		정렬: 체결강도 5분 ↓ → 외인 streak |abs| ↓ → 거래량비 ↓
+		정렬: 체결강도 5분 ↓ → 외인 streak |abs| ↓ → 프로그램 streak |abs| ↓
+		(거래량비 정렬은 [폐기] 일봉 의존이라 제거)
 		"""
 		def sort_key(r):
 			return (
 				-((r.get('cntr_str_5min') or 0)),
 				-abs(r.get('frgnr_streak') or 0),
-				-((r.get('volume_ratio') or 0)),
+				-abs(r.get('prm_streak') or 0),
 			)
 
 		valid = [r for r in results if 'error' not in r]
@@ -378,14 +382,15 @@ class DailyAnalyzer:
 		return messages
 
 	def _format_one(self, r: dict) -> str:
-		"""종목 1건 4줄 포맷."""
-		chg = r.get('today_chg_pct') or 0
-		chg_sym = '🟥' if chg > 0 else '🟦' if chg < 0 else '⬜'
-		bull = '🟢' if r.get('is_bullish') else '🔴'
+		"""종목 1건 포맷 — 체결강도/외인기관/프로그램 (일봉 의존 부분 [폐기])."""
+		# [폐기] 일봉 의존 변수:
+		# chg = r.get('today_chg_pct') or 0
+		# chg_sym = '🟥' if chg > 0 else '🟦' if chg < 0 else '⬜'
+		# bull = '🟢' if r.get('is_bullish') else '🔴'
+		# close = int(r.get('today_close') or 0)
+		# vol_ratio = r.get('volume_ratio') or 0
 		name = r.get('name') or '-'
 		code = r.get('code', '-')
-		close = int(r.get('today_close') or 0)
-		vol_ratio = r.get('volume_ratio') or 0
 		cntr_str = r.get('cntr_str_5min')
 		cntr_str_s = f"{cntr_str:.0f}" if cntr_str is not None else "-"
 
@@ -408,8 +413,8 @@ class DailyAnalyzer:
 			return f"{v:+,}천주"
 
 		return (
-			f"{chg_sym} {name} ({code}) {chg:+.2f}% {bull} {close:,}원{highlight}\n"
-			f"   📊 거래량비 {vol_ratio:.0f}% / 체결강도 {cntr_str_s}\n"
+			f"📍 {name} ({code}){highlight}\n"
+			f"   📊 체결강도 {cntr_str_s}\n"
 			f"   💰 외인 {fmt_streak(r.get('frgnr_streak') or 0)} / "
 			f"기관 {fmt_streak(r.get('orgn_streak') or 0)} / "
 			f"프로그램 {fmt_streak(r.get('prm_streak') or 0)}\n"
