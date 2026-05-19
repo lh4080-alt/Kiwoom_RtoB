@@ -120,6 +120,7 @@ class TestRebuildMasterEdgeCases:
 		)
 
 		result = rebuild_master()
-		assert result['code'].dtype == object  # pandas object = str
+		# pandas 2.x: object, pandas 3.x: StringDtype — 둘 다 string으로 인식
+		assert pd.api.types.is_string_dtype(result['code'])
 		assert all(isinstance(c, str) for c in result['code'])
 		assert all(len(c) == 6 for c in result['code'])  # 6자리 zero-padded
