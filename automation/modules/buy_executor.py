@@ -75,12 +75,42 @@ class BuyExecutor:
 		"""09:00 매수 실행 본체."""
 		from telegram.tel_send import tel_send
 		from utils.buy_queue import load_queue, clear_queue
-		from utils.holdings import add_holding, calc_sell_deadline
+		from utils.holdings import add_holding, calc_sell_deadline, load_holdings
+		from utils.pnl_tracker import check_limits
 
+		# 0-1. 수동 halt 체크
 		if getattr(self.bot, 'is_halted', False):
 			logger.warning("[buy_executor] halted — 매수 스킵")
 			await tel_send("⏸️ [09:00] 매수 정지(halt) 상태 — 자동 매수 스킵")
 			return
+
+		# 0-2. pnl 한도 자동 체크 (봇 재시작 시점 한도 도달 상태 보호)
+		try:
+			holdings_filled = [h for h in await load_holdings() if h.get('status') == 'filled']
+
+			async def _get_price(code):
+				from api.stock_info import fn_ka10001
+				try:
+					tok = await self.bot.token_manager.get_token()
+					info = await fn_ka10001(code, token=tok, silent=True)
+					if isinstance(info, dict):
+						return int(float(info.get('cur_prc') or 0))
+				except Exception:
+					return 0
+				return 0
+
+			limit = await check_limits(holdings_filled, _get_price)
+			if limit:
+				self.bot.is_halted = True
+				reason_kr = '일일 한도' if limit == 'daily_halt' else '주간 한도'
+				logger.warning(f"[buy_executor] pnl {reason_kr} 도달 — 매수 스킵")
+				await tel_send(
+					f"⚠️ [09:00] {reason_kr} 도달 상태 — 자동 매수 정지\n"
+					f"보유 종목은 손절선/시한까지 유지. resume 명령으로 강제 해제 가능 (위험)."
+				)
+				return
+		except Exception:
+			logger.exception("[buy_executor] pnl 한도 체크 실패 (매수 진행)")
 
 		queue = await load_queue()
 		if not queue:
