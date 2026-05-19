@@ -9,9 +9,32 @@ from telegram.tel_send import tel_send
 # 프로그램 사용법 링크 메시지
 USER_GUIDE_MESSAGE = "프로그램 사용법 자세히 보기\nhttps://yalco.notion.site/2beff6b3a35780f3a339e38bc617308e?source=copy_link"
 
+# Phase 2 신규 명령 안내 (조건검색 수집 → 16:00 분석 → Lee 검토 → 다음날 09:00 매수 흐름용)
+PHASE2_COMMANDS = """🆕 [Phase 2 명령]
+
+• pick <code1> [code2] ... — 매수 후보 추가 (6자리)
+  예: pick 005930 000660
+
+• cancel <code> — 매수 후보 취소
+  예: cancel 005930
+
+• status — 봇 상태 (매수 대기열 / halt 여부 / 수집풀)
+
+• halt — 매수 전면 정지 (수동 명령으로만 해제)
+• resume — 매수 재개
+
+• force_daily — [DEBUG] 16:00 분석 즉시 실행 (검증용)
+
+매수 흐름:
+1) 장중 09:00~15:30: 조건검색 매칭 → 수집풀 누적
+2) 16:00 daily_analyzer: 분석 결과 텔레그램 알림 + 풀 비우기
+3) Lee 검토 후 pick 명령으로 매수 후보 확정
+4) 다음날 09:00 buy_executor 자동 매수 (Step C 이후)"""
+
 async def send_user_guide():
-	"""프로그램 사용법 링크를 전송합니다."""
+	"""프로그램 사용법 링크 + Phase 2 명령 안내 전송."""
 	await tel_send(USER_GUIDE_MESSAGE)
+	await tel_send(PHASE2_COMMANDS)
 
 def get_command_detail(command_name):
 	"""특정 명령어의 상세 정보를 반환합니다."""

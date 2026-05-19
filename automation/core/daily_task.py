@@ -68,19 +68,21 @@ class DailyTaskManager:
 			self._daily_done_today = True
 
 	async def _run_daily_task(self):
-		"""16:00 후처리. 현재는 수집풀 비우기만. daily_analyzer 통합 예정."""
+		"""16:00 트리거 — daily_analyzer로 위임.
+		daily_analyzer가 자체적으로 수집풀/매수대기열 비우기까지 수행.
+		"""
 		today = datetime.now().strftime('%Y-%m-%d')
-		loop = asyncio.get_event_loop()
-
 		try:
-			# TODO: daily_analyzer 통합 — 수집풀 종목 자동 분석 + 텔레그램 알림
-			# (현재는 수집풀 비우기만 수행. 분석은 daily_analyzer.py 작성 시 추가)
+			analyzer = getattr(self.bot, 'daily_analyzer', None)
+			if analyzer is None:
+				logger.warning("daily_analyzer 미부착 — 풀 비우기만 수행 (fallback)")
+				loop = asyncio.get_event_loop()
+				from utils.collection_pool import clear_pool
+				cleared = await loop.run_in_executor(None, clear_pool)
+				logger.info(f"[fallback] collection_pool cleared: {cleared} entries")
+				return
 
-			logger.info("[daily] clearing collection_pool")
-			from utils.collection_pool import clear_pool
-			cleared = await loop.run_in_executor(None, clear_pool)
-			logger.info(f"collection_pool cleared: {cleared} entries")
-
+			await analyzer.run()
 			logger.info(f"daily task completed for {today}")
 		except Exception:
 			logger.exception("daily task failed (will not retry until tomorrow)")

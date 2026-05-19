@@ -91,10 +91,14 @@ class ChatCommand:
 		from core.daily_task import DailyTaskManager
 		self.daily_task = DailyTaskManager(self)
 
-		# Phase 2 Step A: 매수 후보 큐 + 매수 정지 플래그 (메모리만, 봇 재시작 시 초기화)
-		# pick/cancel/halt/resume 텔레그램 명령으로 조작. 09:00 매수 실행은 Step C에서.
-		self.buy_queue: list = []   # [{'code': str, 'approved_at': str, 'approved_by': str}, ...]
+		# Phase 2 Step B: 매수 후보 큐 영속화 (config/data/buy_queue.json)
+		# pick/cancel/halt/resume 텔레그램 명령으로 조작. 09:00 매수 실행은 Step C.
+		# buy_queue는 매번 utils/buy_queue.py 함수로 디스크에서 read/write — 메모리 캐시 X.
 		self.is_halted: bool = False
+
+		# Phase 2 Step B: daily_analyzer — 16:00 자동 분석 + 텔레그램 알림
+		from modules.daily_analyzer import DailyAnalyzer
+		self.daily_analyzer = DailyAnalyzer(bot_ref=self)
 	
 	async def _reconnect_with_retry(self, was_feature_1_active: bool):
 		"""연결 끊김 이후 토큰 발급/웹소켓 재연결을 재시도합니다."""
@@ -561,38 +565,32 @@ class ChatCommand:
 			return False
 	
 	# ─────────────────────────────────────────────────────────
-	# Phase 2 Step A — pick/cancel/status 헬퍼
+	# Phase 2 Step B — pick/cancel/status 헬퍼 (영속화 함수 사용)
 	# ─────────────────────────────────────────────────────────
 	async def _cmd_pick(self, codes: list) -> bool:
-		"""매수 후보 종목을 buy_queue에 추가."""
+		"""매수 후보 종목을 buy_queue(파일 영속화)에 추가."""
 		import re
 		valid_re = re.compile(r'^\d{6}$')
-		from datetime import datetime as _dt
 		from utils.collection_pool import get_stock_name
+		from utils.buy_queue import add_to_queue, load_queue
 
 		if not codes:
 			await tel_send("❌ 사용법: pick <종목코드1> [종목코드2] ...")
 			return False
 
-		queued = {item['code'] for item in self.buy_queue}
 		added, duplicate, invalid = [], [], []
 		for code in codes:
 			c = str(code).strip()
 			if not valid_re.match(c):
 				invalid.append(c)
 				continue
-			if c in queued:
+			if await add_to_queue(c, approved_by='telegram'):
+				added.append(c)
+			else:
 				duplicate.append(c)
-				continue
-			self.buy_queue.append({
-				'code': c,
-				'approved_at': _dt.now().isoformat(timespec='seconds'),
-				'approved_by': 'telegram',
-			})
-			queued.add(c)
-			added.append(c)
 
-		# 종목명 부착 (캐시 사용 — 첫 호출만 ka10001)
+		queue = await load_queue()
+
 		async def _with_name(c):
 			n = await get_stock_name(c)
 			return f"{c} {n}" if n else c
@@ -605,46 +603,58 @@ class ChatCommand:
 			lines.append("♻️ 중복: " + ", ".join(duplicate))
 		if invalid:
 			lines.append("❌ 무효(6자리 숫자 필요): " + ", ".join(invalid))
-		lines.append(f"\n📦 매수 대기열 총 {len(self.buy_queue)}건")
+		lines.append(f"\n📦 매수 대기열 총 {len(queue)}건")
 		lines.append("ℹ️ 실제 09:00 매수 실행은 Phase 2 Step C 이후 가동.")
 		await tel_send("\n".join(lines))
 		return True
 
 	async def _cmd_cancel(self, code: str) -> bool:
-		"""buy_queue에서 특정 종목 제거."""
+		"""buy_queue에서 특정 종목 제거 (영속화)."""
+		from utils.buy_queue import remove_from_queue, load_queue
 		c = str(code).strip()
-		before = len(self.buy_queue)
-		self.buy_queue = [item for item in self.buy_queue if item['code'] != c]
-		after = len(self.buy_queue)
-		if before == after:
-			await tel_send(f"❌ [취소 실패] {c} 는 매수 대기열에 없음 (현재 {after}건)")
+		ok = await remove_from_queue(c)
+		queue = await load_queue()
+		if not ok:
+			await tel_send(f"❌ [취소 실패] {c} 는 매수 대기열에 없음 (현재 {len(queue)}건)")
 			return False
-		await tel_send(f"🗑️ [취소] {c} 제거 — 매수 대기열 {after}건")
+		await tel_send(f"🗑️ [취소] {c} 제거 — 매수 대기열 {len(queue)}건")
 		return True
 
 	async def _cmd_status(self) -> bool:
 		"""봇 상태 출력 — 매수 대기열, halt 여부 등."""
 		from utils.collection_pool import get_stock_name, get_pool
+		from utils.buy_queue import load_queue
 		from datetime import datetime as _dt
 
+		queue = await load_queue()
 		pool = get_pool()
 		pool_count = len(pool) if isinstance(pool, dict) else 0
 
 		queue_lines = []
-		for item in self.buy_queue:
-			c = item['code']
+		for item in queue:
+			c = item.get('code', '')
 			n = await get_stock_name(c)
 			queue_lines.append(f"  • {c} {n}".rstrip())
 		queue_block = "\n".join(queue_lines) if queue_lines else "  (없음)"
 
 		msg = (
 			f"=== 봇 상태 ({_dt.now().strftime('%Y-%m-%d %H:%M:%S')}) ===\n"
-			f"\n📦 매수 대기열 ({len(self.buy_queue)}건):\n{queue_block}\n"
+			f"\n📦 매수 대기열 ({len(queue)}건):\n{queue_block}\n"
 			f"\n⏸️ 매수 정지(halt): {'YES' if self.is_halted else 'NO'}\n"
 			f"\n📥 수집풀 누적: {pool_count}종목"
 		)
 		await tel_send(msg)
 		return True
+
+	async def _cmd_force_daily(self) -> bool:
+		"""[DEBUG] daily_analyzer 즉시 실행. Step B 검증 후 제거 예정."""
+		try:
+			await self.daily_analyzer.run()
+			await tel_send("✅ [DEBUG] daily_analyzer 강제 실행 완료")
+			return True
+		except Exception as e:
+			await tel_send(f"❌ [DEBUG] daily_analyzer 실패: {type(e).__name__}: {e}")
+			return False
 
 	async def process_command(self, text):
 		"""텍스트 명령어를 처리합니다."""
@@ -667,8 +677,8 @@ class ChatCommand:
 		# 텍스트 trim 및 소문자 변환
 		command = text.strip().lower()
 
-		# Phase 2 Step A 명령 (pick/cancel/status/halt/resume)
-		# 매수 결정은 buy_queue에만 쌓이고, 실제 09:00 매수 실행은 Step C에서 wiring.
+		# Phase 2 Step A/B 명령 (pick/cancel/status/halt/resume + force_daily)
+		# 매수 결정은 buy_queue.json에 영속화, 실제 09:00 매수 실행은 Step C에서 wiring.
 		if command == 'status':
 			return await self._cmd_status()
 		elif command == 'halt':
@@ -679,6 +689,8 @@ class ChatCommand:
 			self.is_halted = False
 			await tel_send("▶️ [재개] 매수 정상화. 다음 09:00 매수 가동 (Step C 통합 후).")
 			return True
+		elif command == 'force_daily':
+			return await self._cmd_force_daily()
 		elif command.startswith('pick '):
 			parts = text.strip().split()[1:]  # 종목코드는 대소문자 무관하지만 원본 split 사용
 			return await self._cmd_pick(parts)
