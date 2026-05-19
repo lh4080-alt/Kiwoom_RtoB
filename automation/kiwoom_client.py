@@ -1,16 +1,14 @@
 """
 키움 API 클라이언트 — 계정별 인스턴스 분리.
 
-Phase 1 (현재): 클래스 정의만. 봇 startup 통합은 Phase 2 (계정 분리 시).
 각 인스턴스가 독립 토큰 + WebSocket 관리.
 
-시크릿 파일 매핑:
-  search 계정 → config/search_app_key.txt, search_app_secret.txt, search_account_no.txt
-  trade 계정  → config/trade_app_key.txt, trade_app_secret.txt, trade_account_no.txt
+시크릿 파일 매핑 (Lee 최종 결정 2026-05-19):
+  search 계정 (조건검색 조회 전용, 신규 발급) → config/search_app_key.txt + search_app_secret.txt
+  trade 계정 (매수/매도, 기존 계정)            → config/real_app_key.txt + real_app_secret.txt
 
-현재 매핑 (Lee 결정 2026-05-19):
-  - 기존 real_app_key.txt = search 계정 (조건검색 수집)
-  - trade 계정 신규 발급 예정
+load_*_client()는 시크릿 없으면 None 반환 — 봇 startup은 None을 받으면
+단일 계정 모드로 fallback 가능 (예: self.search = self.trade).
 """
 import asyncio
 import json
@@ -124,20 +122,25 @@ class KiwoomClient:
 		return f"<KiwoomClient name={self.name} authed={bool(self.token)}>"
 
 
-def load_search_client() -> KiwoomClient:
-	"""
-	계정1 (search) 클라이언트 로드.
+def _is_placeholder(value: str) -> bool:
+	"""# 주석으로 시작하거나 빈 값이면 placeholder로 간주."""
+	return not value or value.startswith('#')
 
-	우선순위: search_*.txt 파일 → 없으면 real_*.txt fallback (현재 봇 호환).
+
+def load_search_client() -> Optional[KiwoomClient]:
 	"""
-	app_key = _read_secret('search_app_key.txt') or _read_secret('real_app_key.txt')
-	app_secret = _read_secret('search_app_secret.txt') or _read_secret('real_app_secret.txt')
-	account_no = _read_secret('search_account_no.txt')
-	if not app_key or not app_secret:
-		raise FileNotFoundError(
-			"search 계정 시크릿 없음. config/search_app_key.txt + search_app_secret.txt "
-			"(또는 fallback real_*.txt) 필요."
-		)
+	계정1 (search) — 신규 발급된 조회 전용 계정.
+
+	Returns:
+		KiwoomClient: 시크릿 정상 로드 시.
+		None: 시크릿 없음 또는 placeholder — 호출자가 단일 계정 모드로 fallback해야 함.
+	"""
+	app_key = _read_secret('search_app_key.txt')
+	app_secret = _read_secret('search_app_secret.txt')
+	if _is_placeholder(app_key) or _is_placeholder(app_secret):
+		logger.warning("search 계정 시크릿 없음/placeholder — 단일 계정 모드로 fallback 권장")
+		return None
+	account_no = _read_secret('search_account_no.txt')  # optional
 	return KiwoomClient(
 		name='search',
 		app_key=app_key,
@@ -146,17 +149,20 @@ def load_search_client() -> KiwoomClient:
 	)
 
 
-def load_trade_client() -> KiwoomClient:
+def load_trade_client() -> Optional[KiwoomClient]:
 	"""
-	계정2 (trade) 클라이언트 로드. 신규 발급 시크릿 필요.
+	계정2 (trade) — 기존 real_*.txt (자금/매매 권한 보유).
+
+	Returns:
+		KiwoomClient: 시크릿 정상 로드 시.
+		None: 시크릿 없음 (봇 가동 불가 케이스 — 호출자가 명시적으로 처리).
 	"""
-	app_key = _read_secret('trade_app_key.txt')
-	app_secret = _read_secret('trade_app_secret.txt')
-	account_no = _read_secret('trade_account_no.txt')
-	if not app_key or not app_secret:
-		raise FileNotFoundError(
-			"trade 계정 시크릿 없음. config/trade_app_key.txt + trade_app_secret.txt 신규 발급 필요."
-		)
+	app_key = _read_secret('real_app_key.txt')
+	app_secret = _read_secret('real_app_secret.txt')
+	if _is_placeholder(app_key) or _is_placeholder(app_secret):
+		logger.warning("trade(real_*) 시크릿 없음 — 봇 가동 불가")
+		return None
+	account_no = _read_secret('real_account_no.txt')  # optional (현재 봇은 별도 파일 없이 동작)
 	return KiwoomClient(
 		name='trade',
 		app_key=app_key,
