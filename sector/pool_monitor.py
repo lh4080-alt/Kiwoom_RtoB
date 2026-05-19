@@ -2,7 +2,7 @@
 1차/2차 풀 모니터링 + 매수 결정.
 
 흐름:
-    조건검색 매칭 + D-score >= 7 → pool_monitor.add_to_pool()
+    조건검색 매칭 + D-score >= D_SCORE_MIN → pool_monitor.add_to_pool()
       ↓
     1차 풀 5분 모니터링
       - 가격 -2% 지속 15초 → 즉시 2차 풀
@@ -482,7 +482,7 @@ def get_monitor() -> Optional[PoolMonitor]:
 
 async def evaluate_and_add(code: str):
 	"""
-	조건검색 매칭 시 호출. D-score 산출 → 임계(7+) 통과 시 1차 풀 진입.
+	조건검색 매칭 시 호출. D-score 산출 → 임계(D_SCORE_MIN 이상) 통과 시 1차 풀 진입.
 	signal_price/signal_volume은 일봉 마지막 행의 close/volume 사용.
 
 	rt_search.py / websocket.py의 조건검색 매칭 지점에서 호출.
