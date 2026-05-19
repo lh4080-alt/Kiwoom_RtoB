@@ -101,8 +101,3 @@ class DailyTaskManager:
 		except Exception:
 			logger.exception("daily task failed (will not retry until tomorrow)")
 
-	async def force_run_for_test(self):
-		"""디버그 전용. 16:30 안 기다리고 즉시 실행."""
-		logger.warning("[DEBUG] forcing daily task run")
-		await self._run_daily_task()
-		self._daily_done_today = True
