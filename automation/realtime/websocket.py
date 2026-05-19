@@ -390,7 +390,9 @@ class UnifiedWebSocket:
 								stock_codes.append(code)
 
 						if stock_codes:
-							print(f'✅ 조건식 등록 성공 (seq: {seq}) - 초기 스냅샷 {len(stock_codes)}종목: {", ".join(stock_codes)}')
+							codes_str = ", ".join(stock_codes)
+							print(f'✅ 조건식 등록 성공 (seq: {seq}) - 초기 스냅샷 {len(stock_codes)}종목: {codes_str}')
+							await tel_send(f'📊 조건식 등록 (seq={seq}) - {len(stock_codes)}종목\n{codes_str}')
 							seq_str = str(seq) if seq != '알 수 없음' else None
 							for code in stock_codes:
 								if code in self.processing_stocks:
@@ -401,6 +403,7 @@ class UnifiedWebSocket:
 								asyncio.create_task(pool_evaluate_and_add(code))
 						else:
 							print(f'✅ 조건식 등록 성공 (seq: {seq}) - 초기 스냅샷 없음')
+							await tel_send(f'📊 조건식 등록 (seq={seq}) - 초기 스냅샷 없음')
 					else:
 						# 조건식 등록 실패
 						print(f'❌ 조건식 등록 실패 (seq: {seq}) - {return_msg}')
