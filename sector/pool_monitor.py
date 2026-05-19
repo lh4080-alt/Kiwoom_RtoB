@@ -127,7 +127,13 @@ class PoolMonitor:
 		task = asyncio.create_task(self._monitor_primary(code))
 		task_data['task'] = task
 
-		logger.info(f"primary entered: {code} d_score={d_score} price={signal_price}")
+		try:
+			from utils.collection_pool import get_stock_name
+			name = await get_stock_name(code)
+		except Exception:
+			name = ''
+		name_part = f" {name}" if name else ""
+		logger.info(f"primary entered: {code}{name_part} d_score={d_score} price={signal_price}")
 
 	# ============================================================
 	# 0B push 처리 (websocket.py에서 dispatch)

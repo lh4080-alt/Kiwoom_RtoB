@@ -16,6 +16,32 @@ _POOL_PATH = os.path.join(_BASE_DIR, 'config', 'data', 'collection_pool.json')
 
 _lock = asyncio.Lock()
 
+# 종목명 캐시 (프로세스 수명 동안 유지). 종목명은 거의 변경되지 않아 만료 불필요.
+_name_cache: dict = {}
+_name_cache_lock = asyncio.Lock()
+
+
+async def get_stock_name(stk_cd: str) -> str:
+	"""종목명 조회 + 캐시. 캐시 미스 시 ka10001 호출, 실패 시 빈 문자열."""
+	if not stk_cd:
+		return ''
+	if stk_cd in _name_cache:
+		return _name_cache[stk_cd]
+	async with _name_cache_lock:
+		if stk_cd in _name_cache:
+			return _name_cache[stk_cd]
+		try:
+			from api.stock_info import get_stock_info
+			info = await get_stock_info(stk_cd)
+			if isinstance(info, dict):
+				name = (info.get('stk_nm') or '').strip()
+				if name:
+					_name_cache[stk_cd] = name
+					return name
+		except Exception as e:
+			print(f"[수집풀] 종목명 조회 실패 {stk_cd}: {type(e).__name__}: {e}")
+	return ''
+
 
 def _load() -> dict:
 	if not os.path.exists(_POOL_PATH):
@@ -74,7 +100,9 @@ async def add_to_pool(stk_cd, condition_name=None, seq_id=None):
 		_save(pool)
 
 	tag = f"[{cond}]" if cond else (f"[seq:{seq_str}]" if seq_str else "")
-	print(f"📥 [수집풀] {stk_cd} {tag} — 누적 {entry['hit_count']}회 (총 {len(pool)}종목)")
+	name = await get_stock_name(stk_cd)
+	name_part = f" {name}" if name else ""
+	print(f"📥 [수집풀] {stk_cd}{name_part} {tag} — 누적 {entry['hit_count']}회 (총 {len(pool)}종목)")
 
 
 def get_pool() -> dict:
