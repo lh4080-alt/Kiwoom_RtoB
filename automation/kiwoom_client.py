@@ -10,8 +10,6 @@
 load_*_client()는 시크릿 없으면 None 반환 — 봇 startup은 None을 받으면
 단일 계정 모드로 fallback 가능 (예: self.search = self.trade).
 """
-import asyncio
-import json
 import logging
 import os
 from typing import Optional
@@ -66,11 +64,6 @@ class KiwoomClient:
 
 		self.token: Optional[str] = None
 		self.token_expires_at: Optional[str] = None  # 'YYYYMMDDHHMMSS'
-		self.ws = None
-		self.ws_connected = False
-
-		# 외부에서 등록되는 WebSocket 메시지 핸들러 리스트 (async callable)
-		self._message_handlers: list = []
 
 		self.logger = logging.getLogger(f"{__name__}.{name}")
 
@@ -97,63 +90,6 @@ class KiwoomClient:
 		self.token_expires_at = expires
 		self.logger.info(f"[{self.name}] 로그인 성공 (만료 {expires})")
 		return token
-
-	def register_message_handler(self, handler):
-		"""WebSocket 메시지 핸들러 등록 (async callable(msg: dict) → None).
-		여러 핸들러 등록 가능, 수신 시 모두 순차 호출.
-		"""
-		self._message_handlers.append(handler)
-		self.logger.info(f"[{self.name}] 메시지 핸들러 등록 (총 {len(self._message_handlers)}개)")
-
-	async def _on_websocket_message(self, raw: str):
-		"""WebSocket 수신 시 모든 핸들러에게 dispatch (Step C에서 wiring)."""
-		try:
-			msg = json.loads(raw)
-		except json.JSONDecodeError:
-			self.logger.warning(f"[{self.name}] JSON parse 실패: {raw[:200]}")
-			return
-
-		for handler in self._message_handlers:
-			try:
-				await handler(msg)
-			except Exception:
-				self.logger.exception(f"[{self.name}] 핸들러 에러: {getattr(handler, '__name__', repr(handler))}")
-
-	async def send_websocket(self, payload: dict):
-		"""WebSocket 메시지 송신. Step C에서 실제 구현 (현재 stub)."""
-		raise NotImplementedError(
-			"send_websocket은 Phase 2 Step C에서 WebSocket 통합 시 구현. "
-			"Step A에서는 호출 안 함."
-		)
-
-	async def connect_websocket(self):
-		"""WebSocket 연결. Step C에서 실제 구현 (현재 stub)."""
-		raise NotImplementedError(
-			"connect_websocket은 Phase 2 Step C에서 구현."
-		)
-
-	async def call_api(self, api_id: str, body: dict, cont_yn: str = 'N', next_key: str = '') -> dict:
-		"""
-		REST API 호출. 토큰 자동 첨부.
-
-		Args:
-			api_id: TR ID (예: 'ka10001', 'kt10000')
-			body: 요청 본문 dict
-			cont_yn / next_key: 연속조회 옵션
-		"""
-		from utils.rate_limiter import requests
-
-		if not self.token:
-			await self.authenticate()
-		if not self.token:
-			raise RuntimeError(f"[{self.name}] 토큰 없음 — API 호출 불가")
-
-		# api_id로 endpoint 추론은 호출자가 명시적으로 지정하는 게 안전
-		# Phase 1에서는 generic endpoint 사용 안 함. 기존 api/*.py 함수를 통해 호출 유지.
-		raise NotImplementedError(
-			"call_api는 Phase 2에서 endpoint 매핑과 함께 구현. "
-			"Phase 1에서는 기존 api/*.py 함수 사용."
-		)
 
 	def __repr__(self):
 		return f"<KiwoomClient name={self.name} authed={bool(self.token)}>"

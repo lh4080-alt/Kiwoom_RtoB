@@ -310,6 +310,16 @@ class MainApp:
 		except Exception as e:
 			print(f"daily_task 시작 실패: {e}")
 
+		# Phase 2 Step C: buy_executor (09:00 매수) + holdings_manager (보유 모니터링)
+		try:
+			self.chat_command.buy_executor.start()
+			self.chat_command.holdings_manager.start()
+			# 봇 재시작 시 pnl_tracker realized_today 자정 후 리셋
+			from utils.pnl_tracker import reset_daily_if_new_day
+			await reset_daily_if_new_day()
+		except Exception as e:
+			print(f"Step C 모듈 시작 실패: {e}")
+
 		# Startup reset hook — 영구 원칙 강화: 이전 세션 잔재 비우기
 		try:
 			from utils.collection_pool import clear_pool

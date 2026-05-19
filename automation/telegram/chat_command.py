@@ -99,6 +99,14 @@ class ChatCommand:
 		# Phase 2 Step B: daily_analyzer — 16:00 자동 분석 + 텔레그램 알림
 		from modules.daily_analyzer import DailyAnalyzer
 		self.daily_analyzer = DailyAnalyzer(bot_ref=self)
+
+		# Phase 2 Step C: buy_executor (09:00 매수) + holdings_manager (0B 손절/시한/한도)
+		from modules.buy_executor import BuyExecutor
+		from modules.holdings_manager import HoldingsManager
+		self.buy_executor = BuyExecutor(bot_ref=self)
+		self.holdings_manager = HoldingsManager(bot_ref=self)
+		# websocket의 0B 핸들러가 보유 종목 가격 변동 시 holdings_manager.on_0b_quote 호출
+		self.websocket.holdings_manager = self.holdings_manager
 	
 	async def _reconnect_with_retry(self, was_feature_1_active: bool):
 		"""연결 끊김 이후 토큰 발급/웹소켓 재연결을 재시도합니다."""

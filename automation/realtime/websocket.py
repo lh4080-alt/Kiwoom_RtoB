@@ -1906,10 +1906,29 @@ class UnifiedWebSocket:
 			print(f"잔고 동기화 태스크 오류: {e}")
 
 	async def _handle_stock_quote(self, response):
-		"""0B (주식체결) 메시지 처리: 현재가 감시 및 매도/매수 판단"""
+		"""0B (주식체결) 메시지 처리: 현재가 감시 및 매도/매수 판단."""
+		# Phase 2 Step C: 보유 종목 손절 모니터링은 features 활성화와 무관하게 동작
+		holdings_mgr = getattr(self, 'holdings_manager', None)
+		if holdings_mgr is not None:
+			try:
+				code_raw = response.get('item', '')
+				if isinstance(code_raw, list):
+					code_raw = code_raw[0] if code_raw else ''
+				v = response.get('values', {}) or {}
+				cur_raw = str(v.get('10', '0')).replace('+', '').replace('-', '').strip()
+				if code_raw and cur_raw:
+					try:
+						current = int(float(cur_raw))
+					except (ValueError, TypeError):
+						current = 0
+					if current > 0:
+						asyncio.create_task(holdings_mgr.on_0b_quote(code_raw, current))
+			except Exception:
+				logger.exception("holdings_manager dispatch error")
+
 		if not (self.feature_2_active or self.feature_5_active or self.feature_6_active):
 			return
-		
+
 		try:
 			stock_code = response.get('item', '')
 			# item이 리스트인 경우 첫 번째 요소 사용
