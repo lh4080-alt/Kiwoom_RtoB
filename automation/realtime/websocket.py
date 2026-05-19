@@ -366,26 +366,41 @@ class UnifiedWebSocket:
 					seq = response.get('seq', '알 수 없음')
 					return_code = response.get('return_code', -1)
 					return_msg = response.get('return_msg', '')
-					
+
 					if return_code == 0:
-						# 조건식 등록 성공
+						# 조건식 등록 성공 — 초기 스냅샷(현재 조건 만족 종목) 포함될 수 있음
+						# PDF ka10173 스펙: data 항목 = {'jmcode': 'A005930'}
+						# 구버전 호환: {'values': {'9001': '005930'}}
 						data = response.get('data', [])
+						stock_codes = []
 						if data:
-							# 종목 목록이 있는 경우
-							stock_codes = []
 							for item in data:
-								if isinstance(item, dict) and 'values' in item:
-									stock_code = item['values'].get('9001', '알 수 없음')
-									stock_codes.append(stock_code)
+								code = None
+								if isinstance(item, dict):
+									code = item.get('jmcode')
+									if not code and 'values' in item:
+										code = item['values'].get('9001')
 								elif isinstance(item, str):
-									stock_codes.append(item)
-							
-							if stock_codes:
-								print(f'✅ 조건식 등록 성공 (seq: {seq}) - 종목 수신: {", ".join(stock_codes)}')
-							else:
-								print(f'✅ 조건식 등록 성공 (seq: {seq}) - 종목 없음')
+									code = item
+								if not code:
+									continue
+								code = str(code).lstrip('A').strip()
+								if not code:
+									continue
+								stock_codes.append(code)
+
+						if stock_codes:
+							print(f'✅ 조건식 등록 성공 (seq: {seq}) - 초기 스냅샷 {len(stock_codes)}종목: {", ".join(stock_codes)}')
+							seq_str = str(seq) if seq != '알 수 없음' else None
+							for code in stock_codes:
+								if code in self.processing_stocks:
+									print(f"⏳ {code}: 이미 처리 중이므로 스냅샷 신호를 무시합니다.")
+									continue
+								self.processing_stocks.add(code)
+								asyncio.create_task(self._safe_add_to_pool(code, seq_id=seq_str))
+								asyncio.create_task(pool_evaluate_and_add(code))
 						else:
-							print(f'✅ 조건식 등록 성공 (seq: {seq})')
+							print(f'✅ 조건식 등록 성공 (seq: {seq}) - 초기 스냅샷 없음')
 					else:
 						# 조건식 등록 실패
 						print(f'❌ 조건식 등록 실패 (seq: {seq}) - {return_msg}')
