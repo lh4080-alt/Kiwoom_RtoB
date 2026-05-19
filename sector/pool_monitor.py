@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 # ============ 임계 상수 ============
 # 풀 진입 D-score 임계
-D_SCORE_MIN = 7
+D_SCORE_MIN = 6  # 2026-05-19: 7→6 하향 (N=44 표본에서 7+ 통과율 4.5% → 6+ 13.6%)
 
 # 1차 풀
 PRIMARY_WAIT_SEC = 300                # 5분
