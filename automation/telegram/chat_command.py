@@ -90,6 +90,11 @@ class ChatCommand:
 		# 영구 원칙: 외부 프로세스 데이터 조작 금지 — 봇 내부에서만 처리.
 		from core.daily_task import DailyTaskManager
 		self.daily_task = DailyTaskManager(self)
+
+		# Phase 2 Step A: 매수 후보 큐 + 매수 정지 플래그 (메모리만, 봇 재시작 시 초기화)
+		# pick/cancel/halt/resume 텔레그램 명령으로 조작. 09:00 매수 실행은 Step C에서.
+		self.buy_queue: list = []   # [{'code': str, 'approved_at': str, 'approved_by': str}, ...]
+		self.is_halted: bool = False
 	
 	async def _reconnect_with_retry(self, was_feature_1_active: bool):
 		"""연결 끊김 이후 토큰 발급/웹소켓 재연결을 재시도합니다."""
@@ -555,6 +560,92 @@ class ChatCommand:
 			await tel_send(f"❌ setting 명령어 실행 중 오류: {e}")
 			return False
 	
+	# ─────────────────────────────────────────────────────────
+	# Phase 2 Step A — pick/cancel/status 헬퍼
+	# ─────────────────────────────────────────────────────────
+	async def _cmd_pick(self, codes: list) -> bool:
+		"""매수 후보 종목을 buy_queue에 추가."""
+		import re
+		valid_re = re.compile(r'^\d{6}$')
+		from datetime import datetime as _dt
+		from utils.collection_pool import get_stock_name
+
+		if not codes:
+			await tel_send("❌ 사용법: pick <종목코드1> [종목코드2] ...")
+			return False
+
+		queued = {item['code'] for item in self.buy_queue}
+		added, duplicate, invalid = [], [], []
+		for code in codes:
+			c = str(code).strip()
+			if not valid_re.match(c):
+				invalid.append(c)
+				continue
+			if c in queued:
+				duplicate.append(c)
+				continue
+			self.buy_queue.append({
+				'code': c,
+				'approved_at': _dt.now().isoformat(timespec='seconds'),
+				'approved_by': 'telegram',
+			})
+			queued.add(c)
+			added.append(c)
+
+		# 종목명 부착 (캐시 사용 — 첫 호출만 ka10001)
+		async def _with_name(c):
+			n = await get_stock_name(c)
+			return f"{c} {n}" if n else c
+
+		lines = [f"📋 [매수 후보 승인] 추가 {len(added)} / 중복 {len(duplicate)} / 무효 {len(invalid)}"]
+		if added:
+			named = [await _with_name(c) for c in added]
+			lines.append("✅ 추가: " + ", ".join(named))
+		if duplicate:
+			lines.append("♻️ 중복: " + ", ".join(duplicate))
+		if invalid:
+			lines.append("❌ 무효(6자리 숫자 필요): " + ", ".join(invalid))
+		lines.append(f"\n📦 매수 대기열 총 {len(self.buy_queue)}건")
+		lines.append("ℹ️ 실제 09:00 매수 실행은 Phase 2 Step C 이후 가동.")
+		await tel_send("\n".join(lines))
+		return True
+
+	async def _cmd_cancel(self, code: str) -> bool:
+		"""buy_queue에서 특정 종목 제거."""
+		c = str(code).strip()
+		before = len(self.buy_queue)
+		self.buy_queue = [item for item in self.buy_queue if item['code'] != c]
+		after = len(self.buy_queue)
+		if before == after:
+			await tel_send(f"❌ [취소 실패] {c} 는 매수 대기열에 없음 (현재 {after}건)")
+			return False
+		await tel_send(f"🗑️ [취소] {c} 제거 — 매수 대기열 {after}건")
+		return True
+
+	async def _cmd_status(self) -> bool:
+		"""봇 상태 출력 — 매수 대기열, halt 여부 등."""
+		from utils.collection_pool import get_stock_name, get_pool
+		from datetime import datetime as _dt
+
+		pool = get_pool()
+		pool_count = len(pool) if isinstance(pool, dict) else 0
+
+		queue_lines = []
+		for item in self.buy_queue:
+			c = item['code']
+			n = await get_stock_name(c)
+			queue_lines.append(f"  • {c} {n}".rstrip())
+		queue_block = "\n".join(queue_lines) if queue_lines else "  (없음)"
+
+		msg = (
+			f"=== 봇 상태 ({_dt.now().strftime('%Y-%m-%d %H:%M:%S')}) ===\n"
+			f"\n📦 매수 대기열 ({len(self.buy_queue)}건):\n{queue_block}\n"
+			f"\n⏸️ 매수 정지(halt): {'YES' if self.is_halted else 'NO'}\n"
+			f"\n📥 수집풀 누적: {pool_count}종목"
+		)
+		await tel_send(msg)
+		return True
+
 	async def process_command(self, text):
 		"""텍스트 명령어를 처리합니다."""
 		# background_task_manager의 콜백 설정 (처음 호출 시)
@@ -575,7 +666,30 @@ class ChatCommand:
 		
 		# 텍스트 trim 및 소문자 변환
 		command = text.strip().lower()
-		
+
+		# Phase 2 Step A 명령 (pick/cancel/status/halt/resume)
+		# 매수 결정은 buy_queue에만 쌓이고, 실제 09:00 매수 실행은 Step C에서 wiring.
+		if command == 'status':
+			return await self._cmd_status()
+		elif command == 'halt':
+			self.is_halted = True
+			await tel_send("⏸️ [정지] 매수 전면 중단. resume 명령으로 재개.")
+			return True
+		elif command == 'resume':
+			self.is_halted = False
+			await tel_send("▶️ [재개] 매수 정상화. 다음 09:00 매수 가동 (Step C 통합 후).")
+			return True
+		elif command.startswith('pick '):
+			parts = text.strip().split()[1:]  # 종목코드는 대소문자 무관하지만 원본 split 사용
+			return await self._cmd_pick(parts)
+		elif command.startswith('cancel '):
+			parts = command.split()
+			if len(parts) == 2:
+				return await self._cmd_cancel(parts[1])
+			else:
+				await tel_send("❌ 사용법: cancel <종목코드>")
+				return False
+
 		if command == 'start':
 			return await self.start(is_paper_trading=True, feature_numbers=None)
 		elif command == 'start real':

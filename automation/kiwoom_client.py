@@ -69,6 +69,9 @@ class KiwoomClient:
 		self.ws = None
 		self.ws_connected = False
 
+		# 외부에서 등록되는 WebSocket 메시지 핸들러 리스트 (async callable)
+		self._message_handlers: list = []
+
 		self.logger = logging.getLogger(f"{__name__}.{name}")
 
 	async def authenticate(self) -> str:
@@ -94,6 +97,40 @@ class KiwoomClient:
 		self.token_expires_at = expires
 		self.logger.info(f"[{self.name}] 로그인 성공 (만료 {expires})")
 		return token
+
+	def register_message_handler(self, handler):
+		"""WebSocket 메시지 핸들러 등록 (async callable(msg: dict) → None).
+		여러 핸들러 등록 가능, 수신 시 모두 순차 호출.
+		"""
+		self._message_handlers.append(handler)
+		self.logger.info(f"[{self.name}] 메시지 핸들러 등록 (총 {len(self._message_handlers)}개)")
+
+	async def _on_websocket_message(self, raw: str):
+		"""WebSocket 수신 시 모든 핸들러에게 dispatch (Step C에서 wiring)."""
+		try:
+			msg = json.loads(raw)
+		except json.JSONDecodeError:
+			self.logger.warning(f"[{self.name}] JSON parse 실패: {raw[:200]}")
+			return
+
+		for handler in self._message_handlers:
+			try:
+				await handler(msg)
+			except Exception:
+				self.logger.exception(f"[{self.name}] 핸들러 에러: {getattr(handler, '__name__', repr(handler))}")
+
+	async def send_websocket(self, payload: dict):
+		"""WebSocket 메시지 송신. Step C에서 실제 구현 (현재 stub)."""
+		raise NotImplementedError(
+			"send_websocket은 Phase 2 Step C에서 WebSocket 통합 시 구현. "
+			"Step A에서는 호출 안 함."
+		)
+
+	async def connect_websocket(self):
+		"""WebSocket 연결. Step C에서 실제 구현 (현재 stub)."""
+		raise NotImplementedError(
+			"connect_websocket은 Phase 2 Step C에서 구현."
+		)
 
 	async def call_api(self, api_id: str, body: dict, cont_yn: str = 'N', next_key: str = '') -> dict:
 		"""
