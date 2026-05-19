@@ -102,7 +102,7 @@ def lookup_history(code: str, days: int = 30) -> dict:
     }
 
 
-def load_7d_bars(code: str, end_date=None) -> pd.DataFrame | None:
+def load_7d_bars(code, end_date=None) -> pd.DataFrame | None:
     """
     종목의 일봉 parquet에서 end_date까지의 최근 7거래일 OHLCV 반환.
     데이터 부족 시 None.
@@ -111,9 +111,12 @@ def load_7d_bars(code: str, end_date=None) -> pd.DataFrame | None:
     1분봉 집계가 아니라 일봉 직접 read — 매 호출 1파일 ~수십 행만 read해서 매우 가볍다.
 
     Args:
-        code: 6자리 종목코드
+        code: 6자리 종목코드 (str 또는 int — 안전하게 zero-padded str로 정규화)
         end_date: date | str(YYYY-MM-DD) | None (None이면 오늘)
     """
+    # 입력 정규화 — CSV 등에서 int로 들어와도 안전 (Path / int 에러 방지)
+    code = str(code).zfill(6)
+
     if end_date is None:
         end_date = date.today()
     elif isinstance(end_date, str):
@@ -149,11 +152,14 @@ def load_7d_bars(code: str, end_date=None) -> pd.DataFrame | None:
     return df[['date', 'open', 'high', 'low', 'close', 'volume']].tail(7).reset_index(drop=True)
 
 
-def lookup_close(code: str, eval_date: str, offset_bdays: int):
+def lookup_close(code, eval_date: str, offset_bdays: int):
     """
     eval_date 기준 offset_bdays 영업일 후의 종가 조회.
     아직 도래 안한 미래일이거나 데이터 없으면 None.
+
+    code는 str 또는 int 허용 (CSV에서 int로 추론된 경우 대비).
     """
+    code = str(code).zfill(6)
     target_date = pd.to_datetime(eval_date) + pd.tseries.offsets.BDay(offset_bdays)
     if target_date > pd.Timestamp.now().normalize():
         return None

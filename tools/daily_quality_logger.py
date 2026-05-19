@@ -5,11 +5,14 @@
 3. 이전 평가한 종목들의 익일 수익률 사후 기록
 4. 마스터 CSV에 누적
 """
+import logging
 import pandas as pd
 from pathlib import Path
 from datetime import datetime, timedelta
 import sys
 import os
+
+logger = logging.getLogger(__name__)
 
 # 상위 디렉토리 추가하여 sector 모듈 임포트
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -35,6 +38,12 @@ def evaluate_today_pool(eval_date: str) -> pd.DataFrame:
     """오늘 수집한 종목 평가 + 시장 상태 기록."""
     pool = load_today_pool_full()
     codes = list(pool.keys())
+
+    # 빈 풀이면 CSV 생성 스킵 — 빈 컬럼 헤더 없는 CSV는 read_csv에서 EmptyDataError
+    if not codes:
+        logger.info(f"[일일 평가] {eval_date}: 풀 0건 — CSV 생성 스킵")
+        return pd.DataFrame()
+
     kospi_chg, kosdaq_chg = load_market_change(eval_date)
 
     results = []
@@ -70,10 +79,18 @@ def evaluate_today_pool(eval_date: str) -> pd.DataFrame:
         row.update(r['breakdown'])
         results.append(row)
 
+    if not results:
+        # 빈 풀(평가 가능 종목 0건)이면 CSV 만들지 않음 — 빈 컬럼 헤더 없는 CSV는 후속 read에서 EmptyDataError 유발
+        print(f"[일일 평가] {eval_date}: 0건 (collection_pool 비어있음, CSV 생성 skip)")
+        return pd.DataFrame()
+    if not results:
+        logger.info(f"[일일 평가] {eval_date}: 평가 가능 종목 0건 — CSV 생성 스킵")
+        return pd.DataFrame()
+
     df = pd.DataFrame(results)
     daily_path = DAILY_DIR / f'{eval_date}.csv'
     df.to_csv(daily_path, index=False)
-    print(f"[일일 평가] {eval_date}: {len(df)}건 저장 → {daily_path}")
+    logger.info(f"[일일 평가] {eval_date}: {len(df)}건 저장 → {daily_path}")
     return df
 
 
@@ -89,7 +106,12 @@ def backfill_returns(eval_date: str):
         if file_date < cutoff:
             continue
 
-        df = pd.read_csv(daily_file)
+        # code는 6자리 zero-padded 종목코드 — int 추론 방지 (앞 0이 잘리면 lookup_close 실패)
+        try:
+            df = pd.read_csv(daily_file, dtype={'code': str})
+        except pd.errors.EmptyDataError:
+            logger.warning(f"empty CSV skipped in backfill: {daily_file.name}")
+            continue
         updated = False
 
         for idx, row in df.iterrows():
@@ -116,11 +138,16 @@ def rebuild_master():
     """일일 CSV들을 마스터 CSV로 통합."""
     dfs = []
     for daily_file in sorted(DAILY_DIR.glob('*.csv')):
-        dfs.append(pd.read_csv(daily_file))
+        try:
+            df = pd.read_csv(daily_file, dtype={'code': str})
+            dfs.append(df)
+        except pd.errors.EmptyDataError:
+            logger.warning(f"empty CSV skipped in rebuild: {daily_file.name}")
+            continue
     if dfs:
         master = pd.concat(dfs, ignore_index=True)
         master.to_csv(MASTER_CSV, index=False)
-        print(f"[마스터] {len(master)}건 → {MASTER_CSV}")
+        logger.info(f"[마스터] {len(master)}건 → {MASTER_CSV}")
         return master
     return pd.DataFrame()
 
