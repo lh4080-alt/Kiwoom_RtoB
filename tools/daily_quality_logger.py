@@ -126,21 +126,13 @@ def rebuild_master():
 
 
 if __name__ == '__main__':
-    DAILY_DIR.mkdir(exist_ok=True)
-    today = datetime.now().strftime('%Y-%m-%d')
-
-    # 1. 오늘 평가 + daily CSV 저장 (DB 역할)
-    evaluate_today_pool(today)
-
-    # 2. 과거 데이터 수익률 채우기
-    backfill_returns(today)
-
-    # 3. 마스터 재구성
-    rebuild_master()
-
-    # 4. 수집풀 초기화 — daily CSV에 평가 결과가 영구 보존됐으므로 풀은 비워서 다음 거래일을 빈 상태로 시작
-    try:
-        cleared = clear_pool()
-        print(f"[수집풀] {cleared}종목 비움 → 다음 거래일 빈 풀로 시작")
-    except Exception as e:
-        print(f"[수집풀] 비우기 실패: {type(e).__name__}: {e}")
+    # DEPRECATED — 2026-05-19
+    # 외부 프로세스로 직접 실행 금지.
+    # daily 작업은 봇 내부 task(automation/core/daily_task.py)에서만 호출.
+    # 영구 원칙(메모리): 외부 프로세스에서 봇 데이터 파일 직접 조작 금지.
+    # 5/18, 5/19 두 차례 race condition으로 collection_pool 비우기 실패한 사고 재발 방지.
+    raise RuntimeError(
+        "daily_quality_logger는 봇 내부에서만 호출됩니다. "
+        "직접 실행 금지 (영구 원칙: 외부 프로세스 데이터 조작 금지). "
+        "봇이 매일 16:30에 자체적으로 실행함."
+    )

@@ -91,6 +91,11 @@ class ChatCommand:
 		self.pool_monitor = PoolMonitor(self.websocket)
 		set_monitor(self.pool_monitor)
 		self.websocket.pool_monitor = self.pool_monitor  # _handle_stock_quote dispatch용
+
+		# Daily task (매일 16:30 평가 + master 재구성 + collection_pool 비우기)
+		# 영구 원칙: 외부 프로세스 데이터 조작 금지 — 봇 내부에서만 처리.
+		from core.daily_task import DailyTaskManager
+		self.daily_task = DailyTaskManager(self)
 	
 	async def _reconnect_with_retry(self, was_feature_1_active: bool):
 		"""연결 끊김 이후 토큰 발급/웹소켓 재연결을 재시도합니다."""

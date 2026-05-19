@@ -275,9 +275,13 @@ class MainApp:
 		
 		print("\n프로그램을 종료합니다...")
 		self.keep_running = False
+		try:
+			self.chat_command.daily_task.stop()
+		except Exception:
+			pass
 		await self.chat_command.background_task_manager.stop_all()
 		await self.chat_command.websocket.stop()
-		
+
 		# 종료 완료 메시지 전송
 		await tel_send("✅ 프로그램이 종료되었습니다.")
 	
@@ -305,6 +309,20 @@ class MainApp:
 			self.chat_command.pool_monitor.start_daily_reset_loop()
 		except Exception as e:
 			print(f"pool_monitor daily reset loop 시작 실패: {e}")
+
+		# Daily task 시작 (매일 16:30 평가 + master 재구성 + collection_pool 비우기)
+		try:
+			self.chat_command.daily_task.start()
+		except Exception as e:
+			print(f"daily_task 시작 실패: {e}")
+
+		# Startup reset hook — 영구 원칙 강화: 이전 세션 잔재 비우기
+		try:
+			from utils.collection_pool import clear_pool
+			cleared = clear_pool()
+			print(f"[startup] collection_pool cleared: {cleared} entries")
+		except Exception as e:
+			print(f"[startup] collection_pool clear 실패: {e}")
 
 		try:
 			while self.keep_running:
