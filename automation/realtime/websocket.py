@@ -366,11 +366,14 @@ class UnifiedWebSocket:
 					return_code = response.get('return_code', -1)
 					return_msg = response.get('return_msg', '')
 
-					# [DEBUG] cond0 등록 시 스냅샷 종목 수가 HTS 즉시조회와 다른 케이스 진단용
-					data_len = len(response.get('data', []) or [])
-					top_keys = list(response.keys())
-					print(f'[DEBUG] CNSRREQ raw: seq={seq} rc={return_code} top_keys={top_keys} data_len={data_len}')
-					print(f'[DEBUG] CNSRREQ raw data: {response.get("data")}')
+					# CNSRREQ 응답 raw 캡처 (cond0 스냅샷 누락 등 재발 시 진단용).
+					# 평시 INFO 레벨이라 안 보임. settings.json log_level=DEBUG 시 출력.
+					if logger.isEnabledFor(logging.DEBUG):
+						data_len = len(response.get('data', []) or [])
+						top_keys = list(response.keys())
+						logger.debug("CNSRREQ raw: seq=%s rc=%s top_keys=%s data_len=%s",
+						             seq, return_code, top_keys, data_len)
+						logger.debug("CNSRREQ raw data: %s", response.get('data'))
 
 					if return_code == 0:
 						# 조건식 등록 성공 — 초기 스냅샷(현재 조건 만족 종목) 포함될 수 있음

@@ -10,8 +10,11 @@
   FileHandler 추가하면 중복 기록.
 - KSTFormatter로 시스템 시간대 무관하게 KST timestamp 출력 (unix epoch → KST 변환).
 - httpx/httpcore의 INFO 로그는 매 HTTP 요청마다 한 줄이라 시끄러움 → WARNING으로 음소거.
+- 로그 레벨 토글: settings.json `log_level` (DEBUG/INFO/WARNING/ERROR) 또는 환경변수
+  `LOG_LEVEL` 우선. 평시 INFO, 디버그 필요 시 DEBUG로 켜고 봇 재시작.
 """
 import logging
+import os
 import sys
 from datetime import datetime, timezone, timedelta
 
@@ -28,13 +31,27 @@ class KSTFormatter(logging.Formatter):
 		return ct.strftime('%Y-%m-%d %H:%M:%S') + f',{int(record.msecs):03d}'
 
 
+def _resolve_level() -> int:
+	"""환경변수 LOG_LEVEL 우선, 없으면 settings.json `log_level`, 둘 다 없으면 INFO."""
+	env_level = os.environ.get('LOG_LEVEL')
+	if env_level:
+		return getattr(logging, env_level.upper(), logging.INFO)
+	try:
+		# 지연 import — setup_logging 호출 시점엔 sys.path 이미 세팅되어 있음
+		from utils.get_setting import get_setting
+		name = str(get_setting('log_level', 'INFO')).upper()
+		return getattr(logging, name, logging.INFO)
+	except Exception:
+		return logging.INFO
+
+
 def setup_logging():
 	"""봇 startup 시 1회 호출."""
 	handler = logging.StreamHandler(sys.stdout)
 	handler.setFormatter(KSTFormatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s'))
 
 	logging.basicConfig(
-		level=logging.INFO,
+		level=_resolve_level(),
 		handlers=[handler],
 		force=True,
 	)
