@@ -107,6 +107,10 @@ class ChatCommand:
 		self.holdings_manager = HoldingsManager(bot_ref=self)
 		# websocket의 0B 핸들러가 보유 종목 가격 변동 시 holdings_manager.on_0b_quote 호출
 		self.websocket.holdings_manager = self.holdings_manager
+
+		# 차단 종목 재진입 감시 매수 (09:05~14:30 5분 polling)
+		from modules.watching_buyer import WatchingBuyer
+		self.watching_buyer = WatchingBuyer(bot_ref=self)
 	
 	async def _reconnect_with_retry(self, was_feature_1_active: bool):
 		"""연결 끊김 이후 토큰 발급/웹소켓 재연결을 재시도합니다."""
@@ -576,21 +580,32 @@ class ChatCommand:
 	# Phase 2 Step B — pick/cancel/status 헬퍼 (영속화 함수 사용)
 	# ─────────────────────────────────────────────────────────
 	async def _cmd_pick(self, codes: list) -> bool:
-		"""매수 후보 종목을 buy_queue(파일 영속화)에 추가."""
+		"""매수 후보 종목을 buy_queue(파일 영속화)에 추가.
+
+		이미 보유 중인 종목(pending_fill / filled)은 등록 차단.
+		"""
 		import re
 		valid_re = re.compile(r'^\d{6}$')
 		from utils.collection_pool import get_stock_name
 		from utils.buy_queue import add_to_queue, load_queue
+		from utils.holdings import load_holdings
 
 		if not codes:
 			await tel_send("❌ 사용법: pick <종목코드1> [종목코드2] ...")
 			return False
 
-		added, duplicate, invalid = [], [], []
+		# 현재 보유 종목 조회 — 매수 대상 차단용
+		held = await load_holdings()
+		held_codes = {h['code'] for h in held if h.get('status') in ('pending_fill', 'filled')}
+
+		added, duplicate, invalid, already_held = [], [], [], []
 		for code in codes:
 			c = str(code).strip()
 			if not valid_re.match(c):
 				invalid.append(c)
+				continue
+			if c in held_codes:
+				already_held.append(c)
 				continue
 			if await add_to_queue(c, approved_by='telegram'):
 				added.append(c)
@@ -603,16 +618,19 @@ class ChatCommand:
 			n = await get_stock_name(c)
 			return f"{c} {n}" if n else c
 
-		lines = [f"📋 [매수 후보 승인] 추가 {len(added)} / 중복 {len(duplicate)} / 무효 {len(invalid)}"]
+		lines = [
+			f"📋 [매수 후보 승인] 추가 {len(added)} / 중복 {len(duplicate)} / 보유차단 {len(already_held)} / 무효 {len(invalid)}"
+		]
 		if added:
 			named = [await _with_name(c) for c in added]
 			lines.append("✅ 추가: " + ", ".join(named))
 		if duplicate:
 			lines.append("♻️ 중복: " + ", ".join(duplicate))
+		if already_held:
+			lines.append("⚠️ 이미 보유 중: " + ", ".join(already_held))
 		if invalid:
 			lines.append("❌ 무효(6자리 숫자 필요): " + ", ".join(invalid))
 		lines.append(f"\n📦 매수 대기열 총 {len(queue)}건")
-		lines.append("ℹ️ 실제 09:00 매수 실행은 Phase 2 Step C 이후 가동.")
 		await tel_send("\n".join(lines))
 		return True
 
@@ -626,6 +644,50 @@ class ChatCommand:
 			await tel_send(f"❌ [취소 실패] {c} 는 매수 대기열에 없음 (현재 {len(queue)}건)")
 			return False
 		await tel_send(f"🗑️ [취소] {c} 제거 — 매수 대기열 {len(queue)}건")
+		return True
+
+	async def _cmd_watching(self) -> bool:
+		"""watching 큐 종목 목록 + 상태 출력."""
+		from utils.buy_queue_watching import load_watching
+		from datetime import datetime
+
+		entries = await load_watching()
+		if not entries:
+			await tel_send("👀 [감시 종목] 없음")
+			return True
+
+		lines = [f"👀 [감시 종목] {len(entries)}건"]
+		now = datetime.now()
+		for it in entries:
+			code = it.get('code', '-')
+			reason = it.get('block_reason', '-')
+			ratio = it.get('block_ratio')
+			ratio_str = f"{(ratio - 1) * 100:+.1f}%" if isinstance(ratio, (int, float)) else "-"
+			normal_since = it.get('normal_since')
+			if normal_since:
+				try:
+					elapsed_min = int((now - datetime.fromisoformat(normal_since)).total_seconds() / 60)
+					state = f"정상 진입 {elapsed_min}분 경과 (30분 도달 시 매수)"
+				except Exception:
+					state = "정상 진입 (시각 파싱 실패)"
+			else:
+				state = "차단 범위 대기 중"
+			failed_count = it.get('consecutive_failed_count') or 0
+			fail_str = f" / 실패 {failed_count}회" if failed_count else ""
+			lines.append(f"- {code} ({reason} {ratio_str}) {state}{fail_str}")
+		await tel_send("\n".join(lines))
+		return True
+
+	async def _cmd_watching_cancel(self, code: str) -> bool:
+		"""watching 큐에서 특정 종목 제거."""
+		from utils.buy_queue_watching import remove_from_watching, load_watching
+		c = str(code).strip()
+		ok = await remove_from_watching(c)
+		entries = await load_watching()
+		if not ok:
+			await tel_send(f"❌ [감시 취소 실패] {c} 는 감시 큐에 없음 (현재 {len(entries)}건)")
+			return False
+		await tel_send(f"🗑️ [감시 취소] {c} 제거 — 감시 큐 {len(entries)}건")
 		return True
 
 	async def _cmd_status(self) -> bool:
@@ -708,6 +770,15 @@ class ChatCommand:
 				return await self._cmd_cancel(parts[1])
 			else:
 				await tel_send("❌ 사용법: cancel <종목코드>")
+				return False
+		elif command == 'watching':
+			return await self._cmd_watching()
+		elif command.startswith('watching_cancel '):
+			parts = command.split()
+			if len(parts) == 2:
+				return await self._cmd_watching_cancel(parts[1])
+			else:
+				await tel_send("❌ 사용법: watching_cancel <종목코드>")
 				return False
 
 		if command == 'start':

@@ -118,6 +118,8 @@ class BuyExecutor:
 			return
 
 		codes_to_buy = [item['code'] for item in queue[:MAX_BUYS_PER_DAY]]
+		# approved_at 보존 — 차단 시 watching 큐로 이동할 때 사용
+		approved_map = {item['code']: item.get('approved_at') for item in queue[:MAX_BUYS_PER_DAY]}
 		logger.info(f"[buy_executor] 매수 대상 {len(codes_to_buy)}건: {codes_to_buy}")
 
 		token = await self.bot.token_manager.get_token()
@@ -152,6 +154,23 @@ class BuyExecutor:
 				})
 			elif status and status.startswith('blocked'):
 				blocked.append((code, status, result))
+				# 차단 종목 폐기 안 함 — watching 큐로 이동, 장중 5분 polling으로 정상 진입 감시
+				try:
+					from utils.buy_queue_watching import add_to_watching
+					prev_close = result.get('prev')
+					open_or_cur = result.get('open')
+					ratio = (open_or_cur / prev_close) if (prev_close and open_or_cur) else None
+					await add_to_watching({
+						'code': code,
+						'approved_at': approved_map.get(code),
+						'blocked_at': datetime.now().isoformat(timespec='seconds'),
+						'block_reason': status,
+						'block_ratio': ratio,
+						'prev_close': prev_close,
+					})
+					logger.info(f"[buy_executor] {code} watching 추가 ({status}, ratio={ratio})")
+				except Exception:
+					logger.exception(f"[buy_executor] {code} watching 추가 실패")
 			else:
 				failed.append((code, status or 'unknown'))
 
@@ -175,7 +194,7 @@ class BuyExecutor:
 			ratio_str = ""
 			if 'open' in info and 'prev' in info and info['prev']:
 				ratio_str = f" ({info['open']}/{info['prev']} = {info['open']/info['prev']:+.2%})"
-			lines.append(f"  ⚠️ {code} {reason}{ratio_str}")
+			lines.append(f"  ⚠️ {code} {reason}{ratio_str} → 감시 시작")
 		for code, reason in failed:
 			lines.append(f"  ❌ {code} {reason}")
 		lines.append("\n09:05 체결 확인 / 09:30 미체결 취소 예정")
