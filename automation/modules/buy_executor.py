@@ -30,6 +30,50 @@ ORDER_QTY = 1
 MAX_BUYS_PER_DAY = 5
 STOP_LOSS_PCT = -0.03
 
+# 가격 조회 재시도 — 동시호가 직후 0 응답 방어 (failed_no_price 회피)
+PRICE_FETCH_MAX_ATTEMPTS = 3
+PRICE_FETCH_RETRY_SLEEP_SEC = 2
+
+# 09:00 트리거 5초 지연 — 키움 API 시초가 데이터 안정화 시간 확보
+OPEN_TRIGGER_SECOND_MIN = 5
+OPEN_TRIGGER_SECOND_MAX = 30
+
+
+# ─────────────────────────────────────────────────────────
+# Pure helpers (단위 테스트용 — 외부 의존 X)
+# ─────────────────────────────────────────────────────────
+def should_trigger_at_open(now: datetime, executed_today: bool) -> bool:
+	"""09:00:05~09:00:30 사이 첫 폴링에서 한 번만 True. 다른 시각/이미 실행 시 False."""
+	return (
+		now.hour == 9
+		and now.minute == 0
+		and OPEN_TRIGGER_SECOND_MIN <= now.second < OPEN_TRIGGER_SECOND_MAX
+		and not executed_today
+	)
+
+
+async def fetch_valid_price(code: str, token, stock_info_fn,
+                            max_attempts: int = PRICE_FETCH_MAX_ATTEMPTS,
+                            retry_sleep: float = PRICE_FETCH_RETRY_SLEEP_SEC):
+	"""ka10001 가격 조회 — open/prev 둘 다 > 0 될 때까지 최대 max_attempts회 재시도.
+
+	Returns:
+		(open_or_cur, prev_close, attempts_used) — 마지막 시점 값과 시도 횟수.
+		둘 다 > 0이면 즉시 break.
+	"""
+	open_or_cur, prev_close = 0.0, 0.0
+	attempts = 0
+	for i in range(max_attempts):
+		attempts = i + 1
+		info = await stock_info_fn(code, token=token, silent=True)
+		open_or_cur = float(info.get('cur_prc') or 0) if isinstance(info, dict) else 0.0
+		prev_close = float(info.get('prev_close_price') or 0) if isinstance(info, dict) else 0.0
+		if open_or_cur > 0 and prev_close > 0:
+			return open_or_cur, prev_close, attempts
+		if i < max_attempts - 1:
+			await asyncio.sleep(retry_sleep)
+	return open_or_cur, prev_close, attempts
+
 
 class BuyExecutor:
 	"""09:00 매수 자동 실행."""
@@ -50,7 +94,7 @@ class BuyExecutor:
 			self._task.cancel()
 
 	async def _scheduler_loop(self):
-		"""09:00 도래 + 자정 리셋 체크."""
+		"""09:00 도래 + 자정 리셋 체크. 트리거는 09:00:05~09:00:30 (시초가 안정 후)."""
 		while True:
 			try:
 				now = datetime.now()
@@ -58,9 +102,8 @@ class BuyExecutor:
 					self._executed_today = False
 					logger.info("[buy_executor] daily flag reset")
 
-				if (now.hour == 9 and now.minute == 0 and now.second < 30
-						and not self._executed_today):
-					logger.info("[buy_executor] 09:00 트리거")
+				if should_trigger_at_open(now, self._executed_today):
+					logger.info(f"[buy_executor] 09:00 트리거 ({now.strftime('%H:%M:%S')})")
 					await self._execute_at_open()
 					self._executed_today = True
 
@@ -189,14 +232,23 @@ class BuyExecutor:
 		# 텔레그램 알림
 		lines = [f"📦 [09:00 매수 결과] 주문 {len(success)} / 차단 {len(blocked)} / 실패 {len(failed)}"]
 		for r in success:
-			lines.append(f"  ✅ {r['code']} @ {r['price']:,}원 (ord_no {r.get('ord_no','-')})")
+			attempts = r.get('attempts', 1)
+			if attempts >= 2:
+				suffix = f"(재시도 후 성공, {attempts}회)"
+			else:
+				suffix = f"(ord_no {r.get('ord_no','-')})"
+			lines.append(f"  ✅ {r['code']} @ {r['price']:,}원 {suffix}")
 		for code, reason, info in blocked:
 			ratio_str = ""
 			if 'open' in info and 'prev' in info and info['prev']:
 				ratio_str = f" ({info['open']}/{info['prev']} = {info['open']/info['prev']:+.2%})"
 			lines.append(f"  ⚠️ {code} {reason}{ratio_str} → 감시 시작")
 		for code, reason in failed:
-			lines.append(f"  ❌ {code} {reason}")
+			# reason은 status 또는 예외명. failed_no_price의 경우 재시도 후 실패 명시.
+			if reason == 'failed_no_price':
+				lines.append(f"  ❌ {code} failed_no_price ({PRICE_FETCH_MAX_ATTEMPTS}회 재시도 후 가격 응답 0)")
+			else:
+				lines.append(f"  ❌ {code} {reason}")
 		lines.append("\n09:05 체결 확인 / 09:30 미체결 취소 예정")
 		await tel_send("\n".join(lines))
 
@@ -213,22 +265,24 @@ class BuyExecutor:
 			from api.stock_info import fn_ka10001 as stock_info
 			from api.buy_stock import fn_kt10000
 
-			info = await stock_info(code, token=token, silent=True)
-			if not isinstance(info, dict):
-				return {'code': code, 'status': 'failed_no_info'}
-			open_or_cur = float(info.get('cur_prc') or 0)   # 09:00 직후엔 시초가에 근접
-			prev_close = float(info.get('prev_close_price') or 0)
+			# 가격 조회 3회 재시도 (시초가 0 응답 방어)
+			open_or_cur, prev_close, attempts_used = await fetch_valid_price(
+				code, token, stock_info,
+			)
 			if open_or_cur <= 0 or prev_close <= 0:
 				return {'code': code, 'status': 'failed_no_price',
-				        'open': open_or_cur, 'prev': prev_close}
+				        'open': open_or_cur, 'prev': prev_close,
+				        'attempts': attempts_used}
 
 			ratio = open_or_cur / prev_close
 			if ratio >= GAP_UP_LIMIT:
 				return {'code': code, 'status': 'blocked_gap_up',
-				        'open': int(open_or_cur), 'prev': int(prev_close)}
+				        'open': int(open_or_cur), 'prev': int(prev_close),
+				        'attempts': attempts_used}
 			if ratio <= GAP_DOWN_LIMIT:
 				return {'code': code, 'status': 'blocked_gap_down',
-				        'open': int(open_or_cur), 'prev': int(prev_close)}
+				        'open': int(open_or_cur), 'prev': int(prev_close),
+				        'attempts': attempts_used}
 
 			limit_price = min(int(open_or_cur), int(prev_close * LIMIT_PRICE_UPPER))
 
@@ -242,7 +296,8 @@ class BuyExecutor:
 			)
 			if return_code != 0:
 				return {'code': code, 'status': f'failed_rc={return_code}',
-				        'price': limit_price, 'open': int(open_or_cur), 'prev': int(prev_close)}
+				        'price': limit_price, 'open': int(open_or_cur), 'prev': int(prev_close),
+				        'attempts': attempts_used}
 			return {
 				'code': code,
 				'status': 'ordered',
@@ -250,6 +305,7 @@ class BuyExecutor:
 				'ord_no': str(ord_no) if ord_no else '',
 				'open': int(open_or_cur),
 				'prev': int(prev_close),
+				'attempts': attempts_used,
 			}
 		except Exception:
 			logger.exception(f"[buy_one] {code} 실패")
