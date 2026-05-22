@@ -60,6 +60,7 @@ config/data/
 
 # 코드 파일인데 광폭 패턴(*token*, *chat_id*)에 잘못 잡히는 케이스 — 예외 처리
 !automation/telegram/commands/token_manager.py
+!tests/test_token_manager.py
 !config-test/get_chat_id.py
 
 # PC 로컬 로그 모니터 도구 — Beelink와 무관, git 추적 불필요
