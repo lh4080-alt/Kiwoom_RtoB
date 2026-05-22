@@ -330,6 +330,13 @@ class MainApp:
 		except Exception as e:
 			print(f"[startup] collection_pool clear 실패: {e}")
 
+		# Startup self-test (5/22 사고 후 추가): ka10001 응답 필드 무결성 확인 + 알림
+		try:
+			from modules.startup_self_test import run_startup_self_test
+			asyncio.create_task(run_startup_self_test(self.chat_command.token_manager))
+		except Exception as e:
+			print(f"[startup] self-test 호출 실패: {e}")
+
 		try:
 			while self.keep_running:
 				# 채팅 메시지 확인

@@ -118,13 +118,22 @@ async def fn_kt10000(stk_cd, ord_qty, ord_uv, cont_yn='N', next_key='', token=No
 	print('Body:', json.dumps(response_data, indent=4, ensure_ascii=False))  # JSON 응답을 파싱하여 출력
 
 	return_code = response_data.get('return_code')
-	
-	# 주문번호 추출 (ODNO)
+
+	# 주문번호 추출 (ODNO) — 응답 형식이 (a) output 내부 (b) 최상위 둘 다 가능 있어
+	# kt10001(매도)와 동일 방식으로 폴백 키 다중 시도. ka10001 사고와 같은 필드명 가정 회피.
 	order_no = None
 	if return_code == 0:
 		output = response_data.get('output', {})
 		if isinstance(output, dict):
 			order_no = output.get('ODNO')
+		if not order_no:
+			# 최상위 + 다른 표기 폴백
+			order_no = (
+				response_data.get('ODNO')
+				or response_data.get('odno')
+				or response_data.get('order_no')
+				or response_data.get('orderNo')
+			)
 		
 		# 주문 접수 알림 (타임아웃 모니터링 시작 전)
 		if order_no and not skip_timeout:
