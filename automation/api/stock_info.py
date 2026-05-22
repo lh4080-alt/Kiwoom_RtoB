@@ -15,6 +15,31 @@ from api.login import fn_au10001 as get_token
 _last_ka10001_call_time = 0
 _min_interval = 1
 
+
+def extract_prev_close(response_data: dict) -> float:
+	"""ka10001 응답에서 전일 종가 추출.
+
+	키움 실제 응답 필드는 'base_pric' (예: "299500"). 5/22 GST/HL만도 failed_no_price
+	사고 원인 — 봇이 옛 필드명(pred_close_pric 등)만 찾아서 항상 0 반환했음.
+
+	우선순위: base_pric → 4개 legacy 필드 폴백. 모두 없거나 0이면 0.0 반환.
+	음수 표기('-294000') 절댓값 처리.
+	"""
+	raw = (
+		response_data.get('base_pric') or
+		response_data.get('pred_close_pric') or
+		response_data.get('prdy_clpr') or
+		response_data.get('bfdy_clpr') or
+		response_data.get('prev_close_price')
+	)
+	if isinstance(raw, str) and raw.startswith('-'):
+		raw = raw[1:]
+	try:
+		return float(raw) if raw else 0.0
+	except (ValueError, TypeError):
+		return 0.0
+
+
 # 주식기본정보요청
 async def fn_ka10001(stk_cd, cont_yn='N', next_key='', token=None, silent=False):
 	global _last_ka10001_call_time
@@ -67,19 +92,7 @@ async def fn_ka10001(stk_cd, cont_yn='N', next_key='', token=None, silent=False)
 	except (ValueError, TypeError):
 		cur_prc = 0.0
 	
-	# 전일 종가 추출
-	prev_close_raw = (
-		response_data.get('pred_close_pric') or
-		response_data.get('prdy_clpr') or
-		response_data.get('bfdy_clpr') or
-		response_data.get('prev_close_price')
-	)
-	if isinstance(prev_close_raw, str) and prev_close_raw.startswith('-'):
-		prev_close_raw = prev_close_raw[1:]
-	try:
-		prev_close_price = float(prev_close_raw) if prev_close_raw else 0.0
-	except (ValueError, TypeError):
-		prev_close_price = 0.0
+	prev_close_price = extract_prev_close(response_data)
 	
 	return {
 		'stk_nm': response_data.get('stk_nm', ''),
