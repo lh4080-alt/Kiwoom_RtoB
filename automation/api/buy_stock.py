@@ -119,6 +119,17 @@ async def fn_kt10000(stk_cd, ord_qty, ord_uv, cont_yn='N', next_key='', token=No
 
 	return_code = response_data.get('return_code')
 
+	# kt10000 raw 응답 dump (settings.json `kt10000_raw_dump` 토글, default True).
+	# 5/25 첫 실 매수 검증 후 settings.json에 false 명시 또는 코드 default 변경.
+	if get_setting('kt10000_raw_dump', True):
+		raw_preview = json.dumps(response_data, ensure_ascii=False)[:300]
+		print(f"[kt10000 raw] {stk_cd}: {json.dumps(response_data, ensure_ascii=False)}")
+		try:
+			from telegram.tel_send import tel_send
+			await tel_send(f"🔍 kt10000 raw ({stk_cd}): {raw_preview}")
+		except Exception as e:
+			print(f"[kt10000 raw] 텔레그램 알림 실패: {e}")
+
 	# 주문번호 추출 (ODNO) — 응답 형식이 (a) output 내부 (b) 최상위 둘 다 가능 있어
 	# kt10001(매도)와 동일 방식으로 폴백 키 다중 시도. ka10001 사고와 같은 필드명 가정 회피.
 	order_no = None
@@ -134,6 +145,19 @@ async def fn_kt10000(stk_cd, ord_qty, ord_uv, cont_yn='N', next_key='', token=No
 				or response_data.get('order_no')
 				or response_data.get('orderNo')
 			)
+
+		# ord_no 추출 실패 긴급 알림 — return_code OK인데 봇이 주문번호 못 잡은 케이스
+		if not order_no:
+			try:
+				from telegram.tel_send import tel_send
+				raw_500 = json.dumps(response_data, ensure_ascii=False)[:500]
+				await tel_send(
+					f"🚨 [긴급] {stk_cd} 매수 응답 OK인데 ord_no 추출 실패!\n"
+					f"raw: {raw_500}\n"
+					f"수동 확인 + holdings 보정 필요"
+				)
+			except Exception as e:
+				print(f"[kt10000 긴급] 텔레그램 알림 실패: {e}")
 		
 		# 주문 접수 알림 (타임아웃 모니터링 시작 전)
 		if order_no and not skip_timeout:

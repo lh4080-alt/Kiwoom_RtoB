@@ -38,6 +38,9 @@ PRICE_FETCH_RETRY_SLEEP_SEC = 2
 OPEN_TRIGGER_SECOND_MIN = 5
 OPEN_TRIGGER_SECOND_MAX = 30
 
+# 09:35 잔고-봇 정합성 검증에서 제외할 옛 5종목 (Phase 2 Step C 이전 매수, holdings.json 부재)
+LEGACY_HELD_CODES = frozenset({'005380', '005930', '012330', '396500', '445290'})
+
 
 # ─────────────────────────────────────────────────────────
 # Pure helpers (단위 테스트용 — 외부 의존 X)
@@ -50,6 +53,20 @@ def should_trigger_at_open(now: datetime, executed_today: bool) -> bool:
 		and OPEN_TRIGGER_SECOND_MIN <= now.second < OPEN_TRIGGER_SECOND_MAX
 		and not executed_today
 	)
+
+
+def diff_account_vs_holdings(acc_codes, bot_codes, legacy_codes=LEGACY_HELD_CODES):
+	"""09:35 잔고 비교 — (acc만, bot만) 차집합 반환.
+
+	계좌에만 있는 종목 중 옛 5종목은 제외 (handoff: 'Lee 직접 관리, holdings.json 부재').
+	봇 holdings에 있고 계좌에 없으면 매수 실패/취소 미반영 등 이상.
+	"""
+	acc = set(acc_codes)
+	bot = set(bot_codes)
+	legacy = set(legacy_codes)
+	only_in_account = (acc - bot) - legacy
+	only_in_bot = bot - acc
+	return only_in_account, only_in_bot
 
 
 async def fetch_valid_price(code: str, token, stock_info_fn,
@@ -252,9 +269,10 @@ class BuyExecutor:
 		lines.append("\n09:05 체결 확인 / 09:30 미체결 취소 예정")
 		await tel_send("\n".join(lines))
 
-		# 09:05 체결 확인 + 09:30 미체결 취소 태스크
+		# 09:05 체결 확인 + 09:30 미체결 취소 + 09:35 잔고-봇 정합성 검증
 		asyncio.create_task(self._verify_fills_at_0905())
 		asyncio.create_task(self._cancel_unfilled_at_0930())
+		asyncio.create_task(self._verify_holdings_against_account_at_0935())
 
 	async def _buy_one(self, code: str, token: str) -> dict:
 		"""단일 종목 매수.
@@ -409,3 +427,59 @@ class BuyExecutor:
 			await tel_send("\n".join(lines))
 		except Exception:
 			logger.exception("[buy_executor] 미체결 취소 실패")
+
+	async def _verify_holdings_against_account_at_0935(self):
+		"""09:35 — 계좌 실제 보유(kt00004) vs 봇 holdings 정합성 검증.
+
+		ord_no 추출 실패 같은 사일런트 사고를 잡기 위한 안전망:
+		- 봇은 매수 안 했다고 생각하는데 계좌엔 들어가 있는 경우 (kt10000 응답 파싱 실패 시 가능)
+		- 봇은 매수했다고 기록했는데 계좌엔 없는 경우 (취소 누락 등)
+		옛 5종목(LEGACY_HELD_CODES)은 비교 제외 — handoff 영구 원칙대로 Lee 직접 관리.
+		"""
+		while True:
+			now = datetime.now().time()
+			if now >= time(9, 35):
+				break
+			await asyncio.sleep(30)
+
+		try:
+			from telegram.tel_send import tel_send
+			from api.acc_val import fn_kt00004
+			from utils.holdings import load_holdings
+
+			token = await self.bot.token_manager.get_token()
+			balance_rows = await fn_kt00004(print_df=False, token=token)
+
+			acc_codes = set()
+			if isinstance(balance_rows, list):
+				for row in balance_rows:
+					raw_code = str(row.get('stk_cd', '')).lstrip('A').strip()
+					qty_raw = row.get('rmnd_qty', 0)
+					try:
+						qty = int(float(str(qty_raw).replace(',', '')))
+					except (ValueError, TypeError):
+						qty = 0
+					if raw_code and qty > 0:
+						acc_codes.add(raw_code)
+
+			holdings = await load_holdings()
+			bot_codes = {h['code'] for h in holdings
+			             if h.get('status') in ('pending_fill', 'filled')}
+
+			only_in_account, only_in_bot = diff_account_vs_holdings(acc_codes, bot_codes)
+
+			if only_in_account or only_in_bot:
+				await tel_send(
+					f"⚠️ [09:35 잔고-봇 불일치]\n"
+					f"  계좌만: {sorted(only_in_account) or '-'}\n"
+					f"  봇만: {sorted(only_in_bot) or '-'}\n"
+					f"즉시 수동 확인 필요 (ord_no 추출 실패 / 취소 누락 등 가능)"
+				)
+				logger.warning(
+					f"[buy_executor] 09:35 정합성 실패 — only_in_account={only_in_account}, only_in_bot={only_in_bot}"
+				)
+			else:
+				await tel_send(f"✅ [09:35 잔고-봇 일치] {len(acc_codes)}종목")
+				logger.info(f"[buy_executor] 09:35 정합성 OK ({len(acc_codes)}종목)")
+		except Exception:
+			logger.exception("[buy_executor] 09:35 잔고 검증 실패")
