@@ -34,9 +34,11 @@ STOP_LOSS_PCT = -0.03
 PRICE_FETCH_MAX_ATTEMPTS = 3
 PRICE_FETCH_RETRY_SLEEP_SEC = 2
 
-# 09:00 트리거 5초 지연 — 키움 API 시초가 데이터 안정화 시간 확보
-OPEN_TRIGGER_SECOND_MIN = 5
-OPEN_TRIGGER_SECOND_MAX = 30
+# 09:00 트리거 — 키움 ka10001 시초가 데이터 안정화 대기.
+# 5/25 사고 진단: 키움이 09:00:00~09:00:11 시초가 0 응답. 09:00:11 이후 정상 (probe 검증).
+# 안전 마진 4초 → 09:00:15 트리거. 재시도 3회×2초 + 매수 처리 ≈ 09:00:25 완료.
+OPEN_TRIGGER_SECOND_MIN = 15
+OPEN_TRIGGER_SECOND_MAX = 50
 
 # 09:35 잔고-봇 정합성 검증에서 제외할 옛 5종목 (Phase 2 Step C 이전 매수, holdings.json 부재)
 LEGACY_HELD_CODES = frozenset({'005380', '005930', '012330', '396500', '445290'})
@@ -74,6 +76,9 @@ async def fetch_valid_price(code: str, token, stock_info_fn,
                             retry_sleep: float = PRICE_FETCH_RETRY_SLEEP_SEC):
 	"""ka10001 가격 조회 — open/prev 둘 다 > 0 될 때까지 최대 max_attempts회 재시도.
 
+	silent=True 유지 (정상 케이스 noise 0). 0 응답 케이스만 raw 데이터 강제 warning 로깅
+	(다음 사고 시 cur_prc/base_pric 어느 필드 비어있었는지 즉시 진단).
+
 	Returns:
 		(open_or_cur, prev_close, attempts_used) — 마지막 시점 값과 시도 횟수.
 		둘 다 > 0이면 즉시 break.
@@ -83,10 +88,30 @@ async def fetch_valid_price(code: str, token, stock_info_fn,
 	for i in range(max_attempts):
 		attempts = i + 1
 		info = await stock_info_fn(code, token=token, silent=True)
-		open_or_cur = float(info.get('cur_prc') or 0) if isinstance(info, dict) else 0.0
-		prev_close = float(info.get('prev_close_price') or 0) if isinstance(info, dict) else 0.0
+		if isinstance(info, dict):
+			open_or_cur = abs(float(info.get('cur_prc') or 0))
+			prev_close = abs(float(info.get('prev_close_price') or 0))
+		else:
+			open_or_cur = 0.0
+			prev_close = 0.0
 		if open_or_cur > 0 and prev_close > 0:
+			if i > 0:
+				logger.info(
+					"fetch_valid_price 재시도 성공: code=%s attempt=%d/%d cur=%s prev=%s",
+					code, attempts, max_attempts, open_or_cur, prev_close,
+				)
 			return open_or_cur, prev_close, attempts
+
+		# 0 응답 → raw 강제 로깅 (silent=True 유지하면서 실패 시점만 dump)
+		raw = info.get('raw', {}) if isinstance(info, dict) else {}
+		logger.warning(
+			"ka10001 0 응답 (attempt %d/%d) code=%s raw={cur_prc:%s, base_pric:%s, open_pric:%s, return_code:%s, return_msg:%s}",
+			attempts, max_attempts, code,
+			raw.get('cur_prc'), raw.get('base_pric'),
+			raw.get('open_pric'), raw.get('return_code'),
+			raw.get('return_msg'),
+		)
+
 		if i < max_attempts - 1:
 			await asyncio.sleep(retry_sleep)
 	return open_or_cur, prev_close, attempts
