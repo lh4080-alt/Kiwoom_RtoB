@@ -84,6 +84,111 @@ class TestTokenManagerLock:
 		assert t1 != t2
 		assert call_count[0] == 2
 
+	def test_call_with_auto_refresh_on_rc3(self):
+		"""5/26 16:00 daily 사고 회피 검증 — API 응답 rc=3이면 force_refresh + 재시도."""
+		from telegram.commands import token_manager as tm_module
+		from telegram.commands.token_manager import TokenManager
+
+		issue_count = [0]
+
+		async def mock_fn_au10001():
+			issue_count[0] += 1
+			return f"TOKEN_{issue_count[0]}"
+
+		original = tm_module.fn_au10001
+		tm_module.fn_au10001 = mock_fn_au10001
+
+		try:
+			# api_fn: 첫 호출은 rc=3 (토큰 무효), 두 번째는 rc=0 정상
+			call_count = [0]
+			tokens_seen = []
+
+			async def mock_api(*args, **kwargs):
+				call_count[0] += 1
+				tokens_seen.append(kwargs.get('token'))
+				if call_count[0] == 1:
+					return {'return_code': 3, 'return_msg': 'Token 무효'}
+				return {'return_code': 0, 'data': 'OK'}
+
+			async def _run():
+				tm = TokenManager()
+				return await tm.call_with_auto_refresh(mock_api, 'arg1', kw1='val')
+
+			result = asyncio.run(_run())
+		finally:
+			tm_module.fn_au10001 = original
+
+		assert result == {'return_code': 0, 'data': 'OK'}, f"재시도 후 정상 결과 기대, 실제 {result}"
+		assert call_count[0] == 2, f"호출 2회 기대, 실제 {call_count[0]}"
+		assert issue_count[0] == 2, f"토큰 2회 발급 기대 (초기+force_refresh), 실제 {issue_count[0]}"
+		# 첫 호출은 TOKEN_1, 두 번째는 TOKEN_2 (force_refresh 후)
+		assert tokens_seen == ['TOKEN_1', 'TOKEN_2'], f"토큰 변경 확인 실패: {tokens_seen}"
+
+	def test_call_with_auto_refresh_no_retry_on_success(self):
+		"""rc=0이면 재시도 안 함, 토큰도 재발급 안 함."""
+		from telegram.commands import token_manager as tm_module
+		from telegram.commands.token_manager import TokenManager
+
+		issue_count = [0]
+
+		async def mock_fn_au10001():
+			issue_count[0] += 1
+			return f"TOKEN_{issue_count[0]}"
+
+		original = tm_module.fn_au10001
+		tm_module.fn_au10001 = mock_fn_au10001
+
+		try:
+			call_count = [0]
+
+			async def mock_api(*args, **kwargs):
+				call_count[0] += 1
+				return {'return_code': 0, 'data': 'OK'}
+
+			async def _run():
+				tm = TokenManager()
+				return await tm.call_with_auto_refresh(mock_api)
+
+			result = asyncio.run(_run())
+		finally:
+			tm_module.fn_au10001 = original
+
+		assert result == {'return_code': 0, 'data': 'OK'}
+		assert call_count[0] == 1, "rc=0이면 1회 호출"
+		assert issue_count[0] == 1, "rc=0이면 초기 토큰 1회만 발급"
+
+	def test_call_with_auto_refresh_raw_return_code(self):
+		"""fn_ka10001처럼 return_code가 raw 안에 있는 경우도 추출 가능."""
+		from telegram.commands import token_manager as tm_module
+		from telegram.commands.token_manager import TokenManager
+
+		async def mock_fn_au10001():
+			return "TOKEN"
+
+		original = tm_module.fn_au10001
+		tm_module.fn_au10001 = mock_fn_au10001
+
+		try:
+			call_count = [0]
+
+			async def mock_api(*args, **kwargs):
+				call_count[0] += 1
+				if call_count[0] == 1:
+					# return_code 최상위에 없고 raw 안에만
+					return {'cur_prc': 0, 'raw': {'return_code': 3}}
+				return {'cur_prc': 1000, 'raw': {'return_code': 0}}
+
+			async def _run():
+				tm = TokenManager()
+				return await tm.call_with_auto_refresh(mock_api)
+
+			result = asyncio.run(_run())
+		finally:
+			tm_module.fn_au10001 = original
+
+		assert result['cur_prc'] == 1000
+		assert call_count[0] == 2
+
 	def test_reset_during_get_serialized(self):
 		"""reset_token + 동시 get_token race 시나리오 — 5/22 사고 케이스 재현.
 

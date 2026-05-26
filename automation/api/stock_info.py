@@ -98,6 +98,8 @@ async def fn_ka10001(stk_cd, cont_yn='N', next_key='', token=None, silent=False)
 		'stk_nm': response_data.get('stk_nm', ''),
 		'cur_prc': cur_prc,
 		'prev_close_price': prev_close_price,
+		# return_code 직접 노출 — token_manager.call_with_auto_refresh가 일관 검사
+		'return_code': response_data.get('return_code'),
 		# raw 응답 — 0 응답 사고 진단용 (fetch_valid_price에서 base_pric / open_pric 등 확인)
 		'raw': response_data,
 	}

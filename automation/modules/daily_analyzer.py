@@ -233,10 +233,14 @@ class DailyAnalyzer:
 		# close_pos = ((today_close - today_low) / rng * 100) if rng else 50.0
 		# === [폐기 끝] ===
 
-		# 체결강도 (ka10046)
+		# 체결강도 (ka10046) — token_manager wrapper 경유 (rc=3 자동 재발급)
 		cntr_str_5min: Optional[float] = None
 		try:
-			data = await fn_ka10046(code, token)
+			tm = getattr(self.bot, 'token_manager', None) if self.bot else None
+			if tm is not None and hasattr(tm, 'call_with_auto_refresh'):
+				data = await tm.call_with_auto_refresh(fn_ka10046, code)
+			else:
+				data = await fn_ka10046(code, token)
 			if data.get('return_code') == 0:
 				items = data.get('cntr_str_tm', [])
 				if items:
@@ -244,12 +248,16 @@ class DailyAnalyzer:
 		except Exception:
 			logger.exception(f"ka10046 호출 실패 {code}")
 
-		# 외인/기관 일별 5일치 + 거래량비 (ka10059)
+		# 외인/기관 일별 5일치 + 거래량비 (ka10059) — wrapper 경유
 		frgnr_today = orgn_today = ind_today = 0
 		frgnr_streak = orgn_streak = 0
 		vol_ratio: Optional[float] = None
 		try:
-			data = await fn_ka10059(code, token, dt_yyyymmdd)
+			tm = getattr(self.bot, 'token_manager', None) if self.bot else None
+			if tm is not None and hasattr(tm, 'call_with_auto_refresh'):
+				data = await tm.call_with_auto_refresh(fn_ka10059, code, dt=dt_yyyymmdd)
+			else:
+				data = await fn_ka10059(code, token, dt_yyyymmdd)
 			if data.get('return_code') == 0:
 				items = data.get('stk_invsr_orgn', [])[:5]
 				if items:
@@ -272,11 +280,15 @@ class DailyAnalyzer:
 		except Exception:
 			logger.exception(f"ka10059 호출 실패 {code}")
 
-		# 프로그램매매 일별 5일치 (ka90013)
+		# 프로그램매매 일별 5일치 (ka90013) — wrapper 경유
 		prm_net_mm_today = 0
 		prm_streak = 0
 		try:
-			data = await fn_ka90013(code, token, dt_yyyymmdd)
+			tm = getattr(self.bot, 'token_manager', None) if self.bot else None
+			if tm is not None and hasattr(tm, 'call_with_auto_refresh'):
+				data = await tm.call_with_auto_refresh(fn_ka90013, code, dt=dt_yyyymmdd)
+			else:
+				data = await fn_ka90013(code, token, dt_yyyymmdd)
 			if data.get('return_code') == 0:
 				items = data.get('stk_daly_prm_trde_trnsn', [])[:5]
 				if items:
