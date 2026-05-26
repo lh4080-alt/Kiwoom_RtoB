@@ -165,6 +165,47 @@ class TestFetchValidPrice:
 			assert 'return_code' in msg
 
 
+class TestRoundDownToTick:
+	"""호가 단위 내림 — 5/26 rc=20 (주문단가 잘못) 사고 회피."""
+
+	def test_under_2000_won_tick_1(self):
+		"""1,000원대 → 호가 1원, 그대로."""
+		from modules.buy_executor import round_down_to_tick
+		assert round_down_to_tick(1234) == 1234
+
+	def test_2k_5k_tick_5(self):
+		"""2,000~5,000원대 → 호가 5원."""
+		from modules.buy_executor import round_down_to_tick
+		assert round_down_to_tick(3333) == 3330
+		assert round_down_to_tick(3335) == 3335
+
+	def test_5k_20k_tick_10(self):
+		"""5,000~20,000원대 → 호가 10원."""
+		from modules.buy_executor import round_down_to_tick
+		assert round_down_to_tick(15555) == 15550
+
+	def test_50k_200k_tick_100(self):
+		"""50,000~200,000원대 → 호가 100원."""
+		from modules.buy_executor import round_down_to_tick
+		assert round_down_to_tick(123456) == 123400
+
+	def test_200k_500k_tick_500(self):
+		"""200,000~500,000원대 → 호가 500원 (005930 가격대)."""
+		from modules.buy_executor import round_down_to_tick
+		assert round_down_to_tick(295150) == 295000
+		assert round_down_to_tick(292500) == 292500  # 이미 호가 맞음
+
+	def test_over_500k_tick_1000(self):
+		"""500,000원 이상 → 호가 1,000원."""
+		from modules.buy_executor import round_down_to_tick
+		assert round_down_to_tick(750555) == 750000
+
+	def test_zero_returns_zero(self):
+		"""0 입력 → 0 반환 (안전망)."""
+		from modules.buy_executor import round_down_to_tick
+		assert round_down_to_tick(0) == 0
+
+
 class TestShouldTriggerAtOpen:
 	"""09:00 트리거 시점 — 5/25 사고 후 15~50초 윈도우로 확대."""
 

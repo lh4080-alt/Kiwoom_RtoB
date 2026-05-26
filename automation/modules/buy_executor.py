@@ -57,6 +57,21 @@ def should_trigger_at_open(now: datetime, executed_today: bool) -> bool:
 	)
 
 
+def round_down_to_tick(price: int) -> int:
+	"""키움 호가 단위로 내림.
+
+	5/26 사고 진단: 시초가/계산가가 호가 단위 안 맞으면 키움이 rc=20 "주문단가를 잘못입력" 거부.
+	min(시초가, prev×1.02) 결과를 가격대별 호가(get_tick_size)로 floor → 항상 호가 정합.
+	"""
+	from utils.math_helper import get_tick_size
+	if price <= 0:
+		return 0
+	tick = get_tick_size(price)
+	if tick <= 0:
+		return price
+	return (price // tick) * tick
+
+
 def diff_account_vs_holdings(acc_codes, bot_codes, legacy_codes=LEGACY_HELD_CODES):
 	"""09:35 잔고 비교 — (acc만, bot만) 차집합 반환.
 
@@ -327,7 +342,10 @@ class BuyExecutor:
 				        'open': int(open_or_cur), 'prev': int(prev_close),
 				        'attempts': attempts_used}
 
-			limit_price = min(int(open_or_cur), int(prev_close * LIMIT_PRICE_UPPER))
+			# 5/26 사고 진단: 키움 rc=20 (주문단가를 잘못입력) — 호가 단위 안 맞음.
+			# 005930 같은 29만원대 = 호가 500원. min(시초, prev×1.02) 결과를 호가로 내림.
+			raw_limit = min(int(open_or_cur), int(prev_close * LIMIT_PRICE_UPPER))
+			limit_price = round_down_to_tick(raw_limit)
 
 			return_code, ord_no = await fn_kt10000(
 				stk_cd=code,
