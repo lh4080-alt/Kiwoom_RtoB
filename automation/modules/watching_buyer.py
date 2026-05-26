@@ -269,8 +269,19 @@ class WatchingBuyer:
 		except Exception:
 			logger.exception("[watching_buyer] pnl 한도 체크 실패 (매수 진행)")
 
-		# 5. 매수 실행 (갭 검증은 이미 감시 통과 — skip)
-		limit_price = min(int(cur_price), int(prev_close * LIMIT_PRICE_UPPER))
+		# 5. 매수 실행 — ka10004 호가(bid) 직접 사용 (호가 단위 위반 불가, chk_n_buy 패턴)
+		from api.check_bid import fn_ka10004 as check_bid
+		try:
+			bid = int(await check_bid(code, token=await self.bot.token_manager.get_token()))
+		except Exception:
+			logger.exception(f"[watching_buyer] {code} 호가 조회 실패")
+			await self._record_failure(code, entry, 'bid_query_failed')
+			return
+		if bid <= 0:
+			logger.warning(f"[watching_buyer] {code} 호가 응답 0 — 매수 스킵")
+			return
+
+		limit_price = bid
 		token = await self.bot.token_manager.get_token()
 		try:
 			return_code, ord_no = await fn_kt10000(
@@ -283,7 +294,6 @@ class WatchingBuyer:
 			)
 		except Exception as e:
 			logger.exception(f"[watching_buyer] {code} 매수 호출 예외")
-			# 예외는 rc 없는 케이스 — 일관성 위해 별도 rc 'exception' 처리
 			await self._record_failure(code, entry, 'exception')
 			return
 

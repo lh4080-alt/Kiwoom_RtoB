@@ -30,13 +30,9 @@ ORDER_QTY = 1
 MAX_BUYS_PER_DAY = 5
 STOP_LOSS_PCT = -0.03
 
-# 가격 조회 재시도 — 동시호가 직후 0 응답 방어 (failed_no_price 회피)
-PRICE_FETCH_MAX_ATTEMPTS = 3
-PRICE_FETCH_RETRY_SLEEP_SEC = 2
-
-# 09:00 트리거 — 키움 ka10001 시초가 데이터 안정화 대기.
-# 5/25 사고 진단: 키움이 09:00:00~09:00:11 시초가 0 응답. 09:00:11 이후 정상 (probe 검증).
-# 안전 마진 4초 → 09:00:15 트리거. 재시도 3회×2초 + 매수 처리 ≈ 09:00:25 완료.
+# 09:00 트리거 윈도우. 5/26 통합 후 매수가는 ka10004 호가 직접 사용 → 시초가 0 응답 방어
+# (PRICE_FETCH_*) 불필요. 트리거 시각만 안전 마진으로 15~50초 유지 (시초가 데이터와 무관하게
+# 키움 서버 9시 직후 부하 분산).
 OPEN_TRIGGER_SECOND_MIN = 15
 OPEN_TRIGGER_SECOND_MAX = 50
 
@@ -57,21 +53,6 @@ def should_trigger_at_open(now: datetime, executed_today: bool) -> bool:
 	)
 
 
-def round_down_to_tick(price: int) -> int:
-	"""키움 호가 단위로 내림.
-
-	5/26 사고 진단: 시초가/계산가가 호가 단위 안 맞으면 키움이 rc=20 "주문단가를 잘못입력" 거부.
-	min(시초가, prev×1.02) 결과를 가격대별 호가(get_tick_size)로 floor → 항상 호가 정합.
-	"""
-	from utils.math_helper import get_tick_size
-	if price <= 0:
-		return 0
-	tick = get_tick_size(price)
-	if tick <= 0:
-		return price
-	return (price // tick) * tick
-
-
 def diff_account_vs_holdings(acc_codes, bot_codes, legacy_codes=LEGACY_HELD_CODES):
 	"""09:35 잔고 비교 — (acc만, bot만) 차집합 반환.
 
@@ -84,52 +65,6 @@ def diff_account_vs_holdings(acc_codes, bot_codes, legacy_codes=LEGACY_HELD_CODE
 	only_in_account = (acc - bot) - legacy
 	only_in_bot = bot - acc
 	return only_in_account, only_in_bot
-
-
-async def fetch_valid_price(code: str, token, stock_info_fn,
-                            max_attempts: int = PRICE_FETCH_MAX_ATTEMPTS,
-                            retry_sleep: float = PRICE_FETCH_RETRY_SLEEP_SEC):
-	"""ka10001 가격 조회 — open/prev 둘 다 > 0 될 때까지 최대 max_attempts회 재시도.
-
-	silent=True 유지 (정상 케이스 noise 0). 0 응답 케이스만 raw 데이터 강제 warning 로깅
-	(다음 사고 시 cur_prc/base_pric 어느 필드 비어있었는지 즉시 진단).
-
-	Returns:
-		(open_or_cur, prev_close, attempts_used) — 마지막 시점 값과 시도 횟수.
-		둘 다 > 0이면 즉시 break.
-	"""
-	open_or_cur, prev_close = 0.0, 0.0
-	attempts = 0
-	for i in range(max_attempts):
-		attempts = i + 1
-		info = await stock_info_fn(code, token=token, silent=True)
-		if isinstance(info, dict):
-			open_or_cur = abs(float(info.get('cur_prc') or 0))
-			prev_close = abs(float(info.get('prev_close_price') or 0))
-		else:
-			open_or_cur = 0.0
-			prev_close = 0.0
-		if open_or_cur > 0 and prev_close > 0:
-			if i > 0:
-				logger.info(
-					"fetch_valid_price 재시도 성공: code=%s attempt=%d/%d cur=%s prev=%s",
-					code, attempts, max_attempts, open_or_cur, prev_close,
-				)
-			return open_or_cur, prev_close, attempts
-
-		# 0 응답 → raw 강제 로깅 (silent=True 유지하면서 실패 시점만 dump)
-		raw = info.get('raw', {}) if isinstance(info, dict) else {}
-		logger.warning(
-			"ka10001 0 응답 (attempt %d/%d) code=%s raw={cur_prc:%s, base_pric:%s, open_pric:%s, return_code:%s, return_msg:%s}",
-			attempts, max_attempts, code,
-			raw.get('cur_prc'), raw.get('base_pric'),
-			raw.get('open_pric'), raw.get('return_code'),
-			raw.get('return_msg'),
-		)
-
-		if i < max_attempts - 1:
-			await asyncio.sleep(retry_sleep)
-	return open_or_cur, prev_close, attempts
 
 
 class BuyExecutor:
@@ -289,23 +224,26 @@ class BuyExecutor:
 		# 텔레그램 알림
 		lines = [f"📦 [09:00 매수 결과] 주문 {len(success)} / 차단 {len(blocked)} / 실패 {len(failed)}"]
 		for r in success:
-			attempts = r.get('attempts', 1)
-			if attempts >= 2:
-				suffix = f"(재시도 후 성공, {attempts}회)"
-			else:
-				suffix = f"(ord_no {r.get('ord_no','-')})"
-			lines.append(f"  ✅ {r['code']} @ {r['price']:,}원 {suffix}")
+			lines.append(f"  ✅ {r['code']} @ {r['price']:,}원 (ord_no {r.get('ord_no','-')})")
 		for code, reason, info in blocked:
 			ratio_str = ""
 			if 'open' in info and 'prev' in info and info['prev']:
 				ratio_str = f" ({info['open']}/{info['prev']} = {info['open']/info['prev']:+.2%})"
 			lines.append(f"  ⚠️ {code} {reason}{ratio_str} → 감시 시작")
 		for code, reason in failed:
-			# reason은 status 또는 예외명. failed_no_price의 경우 재시도 후 실패 명시.
-			if reason == 'failed_no_price':
-				lines.append(f"  ❌ {code} failed_no_price ({PRICE_FETCH_MAX_ATTEMPTS}회 재시도 후 가격 응답 0)")
-			else:
-				lines.append(f"  ❌ {code} {reason}")
+			# 새 reason 코드 한글 매핑
+			label = {
+				'failed_already_held': '이미 보유 중',
+				'failed_unfilled_exists': '같은 종목 미체결 주문 존재',
+				'failed_cooldown': '매도 후 쿨다운 중',
+				'failed_blacklist': '자동매매 금지 종목',
+				'failed_no_base_pric': '전일 종가 응답 없음',
+				'failed_no_bid': '호가 응답 0',
+				'failed_my_stocks_query': '보유 조회 실패',
+				'failed_unfilled_query': '미체결 조회 실패',
+				'failed_bid_query': '호가 조회 실패',
+			}.get(reason, reason)
+			lines.append(f"  ❌ {code} {label}")
 		lines.append("\n09:05 체결 확인 / 09:30 미체결 취소 예정")
 		await tel_send("\n".join(lines))
 
@@ -317,59 +255,110 @@ class BuyExecutor:
 	async def _buy_one(self, code: str, token: str) -> dict:
 		"""단일 종목 매수.
 
-		Returns dict with keys: code, status, price (지정가), ord_no, open, prev.
+		원본 키움 봇 chk_n_buy 패턴 + 우리 보강(갭/halt/pnl) 통합:
+		  1) 안전망 4개 (chk_n_buy): 보유 중복 / 미체결 / 쿨다운 / 자동매매 금지
+		  2) 가격: ka10001로 base_pric만 받아 갭 검증 + ka10004 호가(bid)로 매수
+		     - ka10004 = 매도 최우선 호가. 호가 단위 위반 불가 → 5/26 rc=20 사고 원천 회피
+		     - 시초가 미반영(cur_prc=0)이어도 base_pric만 있으면 갭 검증 가능
+		  3) 갭상승/하락 차단 (우리 보강 유지)
+		  4) fn_kt10000으로 매수 (ord_uv=bid)
+
+		Returns dict with keys: code, status, price, ord_no, open, prev.
 		"""
+		from api.stock_info import fn_ka10001 as stock_info
+		from api.check_bid import fn_ka10004 as check_bid
+		from api.buy_stock import fn_kt10000
+		from api.acc_val import fn_kt00004 as get_my_stocks
+		from api.check_unfilled import fn_ka10075 as check_unfilled
+		from utils.sold_stocks_manager import is_in_cooldown
+		from utils.blocklist_checker import is_blocked
+		from utils.stock_code_normalizer import normalize_stock_code
+		from utils.get_setting import get_setting
+
 		try:
-			from api.stock_info import fn_ka10001 as stock_info
-			from api.buy_stock import fn_kt10000
+			# ── 안전망 1: 자동매매 금지 목록 (watching 큐로 가지 않게 failed_* prefix)
+			if is_blocked(code):
+				return {'code': code, 'status': 'failed_blacklist'}
 
-			# 가격 조회 3회 재시도 (시초가 0 응답 방어)
-			open_or_cur, prev_close, attempts_used = await fetch_valid_price(
-				code, token, stock_info,
-			)
-			if open_or_cur <= 0 or prev_close <= 0:
-				return {'code': code, 'status': 'failed_no_price',
-				        'open': open_or_cur, 'prev': prev_close,
-				        'attempts': attempts_used}
+			# ── 안전망 2: 이미 보유 중인지
+			try:
+				my_stocks = await get_my_stocks(print_df=False, token=token)
+				if isinstance(my_stocks, list):
+					for stock in my_stocks:
+						if normalize_stock_code(stock.get('stk_cd', '')) == code:
+							return {'code': code, 'status': 'failed_already_held'}
+			except Exception:
+				logger.exception(f"[_buy_one] {code} 보유 조회 실패 (매수 중단)")
+				return {'code': code, 'status': 'failed_my_stocks_query'}
 
-			ratio = open_or_cur / prev_close
+			# ── 안전망 3: 미체결 (같은 종목 중복 주문 방지)
+			try:
+				unfilled = await check_unfilled(stk_cd=code, trde_tp='2', token=token)
+				if unfilled:
+					if isinstance(unfilled, dict):
+						unfilled = [unfilled]
+					if isinstance(unfilled, list):
+						for o in unfilled:
+							if not isinstance(o, dict):
+								continue
+							ocd = normalize_stock_code(o.get('stk_cd') or o.get('pdno') or '')
+							if (not ocd) or (ocd == code):
+								return {'code': code, 'status': 'failed_unfilled_exists'}
+			except Exception:
+				logger.exception(f"[_buy_one] {code} 미체결 조회 실패 (매수 중단)")
+				return {'code': code, 'status': 'failed_unfilled_query'}
+
+			# ── 안전망 4: 매도 쿨다운 (재매수 회피)
+			cooldown_hours = get_setting('sell_cooldown_hours', 24)
+			if is_in_cooldown(code, cooldown_hours):
+				return {'code': code, 'status': 'failed_cooldown'}
+
+			# ── 가격 1: ka10001로 base_pric (갭 검증용)
+			info = await stock_info(code, token=token, silent=True)
+			prev_close = abs(float(info.get('prev_close_price') or 0)) if isinstance(info, dict) else 0.0
+			if prev_close <= 0:
+				return {'code': code, 'status': 'failed_no_base_pric'}
+
+			# ── 가격 2: ka10004 호가 (실제 매수가, 호가 단위 위반 불가)
+			try:
+				bid = int(await check_bid(code, token=token))
+			except Exception:
+				logger.exception(f"[_buy_one] {code} 호가 조회 실패")
+				return {'code': code, 'status': 'failed_bid_query'}
+			if bid <= 0:
+				return {'code': code, 'status': 'failed_no_bid', 'prev': int(prev_close)}
+
+			# ── 갭 차단 (우리 보강 유지)
+			ratio = bid / prev_close
 			if ratio >= GAP_UP_LIMIT:
 				return {'code': code, 'status': 'blocked_gap_up',
-				        'open': int(open_or_cur), 'prev': int(prev_close),
-				        'attempts': attempts_used}
+				        'open': bid, 'prev': int(prev_close)}
 			if ratio <= GAP_DOWN_LIMIT:
 				return {'code': code, 'status': 'blocked_gap_down',
-				        'open': int(open_or_cur), 'prev': int(prev_close),
-				        'attempts': attempts_used}
+				        'open': bid, 'prev': int(prev_close)}
 
-			# 5/26 사고 진단: 키움 rc=20 (주문단가를 잘못입력) — 호가 단위 안 맞음.
-			# 005930 같은 29만원대 = 호가 500원. min(시초, prev×1.02) 결과를 호가로 내림.
-			raw_limit = min(int(open_or_cur), int(prev_close * LIMIT_PRICE_UPPER))
-			limit_price = round_down_to_tick(raw_limit)
-
+			# ── 매수 주문 (ka10004 호가 그대로 → 호가 위반 불가)
 			return_code, ord_no = await fn_kt10000(
 				stk_cd=code,
 				ord_qty=ORDER_QTY,
-				ord_uv=limit_price,
+				ord_uv=bid,
 				token=token,
 				order_type='limit',
-				skip_timeout=True,  # 별도 09:30 취소 흐름 사용
+				skip_timeout=True,
 			)
 			if return_code != 0:
 				return {'code': code, 'status': f'failed_rc={return_code}',
-				        'price': limit_price, 'open': int(open_or_cur), 'prev': int(prev_close),
-				        'attempts': attempts_used}
+				        'price': bid, 'open': bid, 'prev': int(prev_close)}
 			return {
 				'code': code,
 				'status': 'ordered',
-				'price': limit_price,
+				'price': bid,
 				'ord_no': str(ord_no) if ord_no else '',
-				'open': int(open_or_cur),
+				'open': bid,
 				'prev': int(prev_close),
-				'attempts': attempts_used,
 			}
 		except Exception:
-			logger.exception(f"[buy_one] {code} 실패")
+			logger.exception(f"[_buy_one] {code} 예외")
 			raise
 
 	async def _verify_fills_at_0905(self):

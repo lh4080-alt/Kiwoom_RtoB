@@ -9,6 +9,30 @@ import utils.config as config
 from utils.rate_limiter import requests
 from api.login import fn_au10001 as get_token
 
+
+def parse_sel_fpr_bid(response_data: dict) -> float:
+	"""ka10004 응답에서 매도 최우선 호가 (sel_fpr_bid) 추출.
+
+	5/26 probe로 응답 키 확정. 키움이 음수 표기('-298500')로 하락 시 보낼 수 있어
+	abs() 절댓값 처리. 부재/빈값/파싱 실패는 0.0.
+
+	Args:
+		response_data: ka10004 응답 dict.
+
+	Returns:
+		float: 절댓값 호가. 부재/실패 시 0.0.
+	"""
+	if not isinstance(response_data, dict):
+		return 0.0
+	raw = response_data.get('sel_fpr_bid', 0)
+	if raw is None or raw == '':
+		return 0.0
+	try:
+		return abs(float(raw))
+	except (ValueError, TypeError):
+		return 0.0
+
+
 # 주식호가요청
 async def fn_ka10004(stk_cd, cont_yn='N', next_key='', token=None, silent=False):
 	"""
@@ -60,21 +84,11 @@ async def fn_ka10004(stk_cd, cont_yn='N', next_key='', token=None, silent=False)
 				print(f"JSON 파싱 실패 (종목: {stk_cd}): {e}")
 			return 0
 		
-		# sel_fpr_bid 안전하게 가져오기 (.get() 사용)
-		sel_fpr_bid_raw = response_data.get('sel_fpr_bid', 0)
-		
-		# 값이 None이거나 빈 문자열인 경우 처리
-		if sel_fpr_bid_raw is None or sel_fpr_bid_raw == '':
+		# parse_sel_fpr_bid 헬퍼 사용 (음수 표기 abs 처리, 부재/실패 시 0.0)
+		sel_fpr_bid = parse_sel_fpr_bid(response_data)
+		if sel_fpr_bid <= 0:
 			if not silent:
-				print(f"매도최우선호가가 없습니다 (종목: {stk_cd})")
-			return 0
-		
-		# 데이터 타입 변환 안전 장치
-		try:
-			sel_fpr_bid = abs(float(sel_fpr_bid_raw))
-		except (ValueError, TypeError) as e:
-			if not silent:
-				print(f"매도최우선호가를 숫자로 변환할 수 없습니다 (종목: {stk_cd}, 값: {sel_fpr_bid_raw}): {e}")
+				print(f"매도최우선호가가 없거나 0입니다 (종목: {stk_cd}, raw={response_data.get('sel_fpr_bid')!r})")
 			return 0
 
 		if not silent:
