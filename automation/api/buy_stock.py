@@ -14,6 +14,30 @@ from utils.math_helper import calculate_lower_price, calculate_price_by_btp
 from api.stock_info import fn_ka10001 as stock_info
 from api.buy_monitor import monitor_buy_order
 
+
+def extract_order_no(response_data: dict):
+	"""kt10000 응답에서 주문번호 추출.
+
+	5/26 buy_command raw 응답으로 정답 키 확정:
+	  {"ord_no": "0411161", "dmst_stex_tp": "KRX", "return_code": 0, ...}
+	최상위 'ord_no' (소문자+언더스코어). output 래핑 없음.
+	옛 폴백 키 (ODNO/odno/order_no/orderNo)는 안전망으로 유지.
+	"""
+	if not isinstance(response_data, dict):
+		return None
+	order_no = (
+		response_data.get('ord_no')
+		or response_data.get('ODNO')
+		or response_data.get('odno')
+		or response_data.get('order_no')
+		or response_data.get('orderNo')
+	)
+	if not order_no:
+		output = response_data.get('output', {})
+		if isinstance(output, dict):
+			order_no = output.get('ODNO') or output.get('ord_no')
+	return order_no
+
 # 주식 매수주문
 async def fn_kt10000(stk_cd, ord_qty, ord_uv, cont_yn='N', next_key='', token=None, skip_timeout=False, order_type=None):
 	"""
@@ -119,9 +143,9 @@ async def fn_kt10000(stk_cd, ord_qty, ord_uv, cont_yn='N', next_key='', token=No
 
 	return_code = response_data.get('return_code')
 
-	# kt10000 raw 응답 dump (settings.json `kt10000_raw_dump` 토글, default True).
-	# 5/25 첫 실 매수 검증 후 settings.json에 false 명시 또는 코드 default 변경.
-	if get_setting('kt10000_raw_dump', True):
+	# kt10000 raw 응답 dump — 응답 형식 추적 완료(5/26 ord_no 키 확정) 후 default False 전환.
+	# 향후 응답 형식 의심되거나 새 거부 사유 발생 시 settings.json에 true 명시로 재활성.
+	if get_setting('kt10000_raw_dump', False):
 		raw_preview = json.dumps(response_data, ensure_ascii=False)[:300]
 		print(f"[kt10000 raw] {stk_cd}: {json.dumps(response_data, ensure_ascii=False)}")
 		try:
@@ -130,21 +154,10 @@ async def fn_kt10000(stk_cd, ord_qty, ord_uv, cont_yn='N', next_key='', token=No
 		except Exception as e:
 			print(f"[kt10000 raw] 텔레그램 알림 실패: {e}")
 
-	# 주문번호 추출 (ODNO) — 응답 형식이 (a) output 내부 (b) 최상위 둘 다 가능 있어
-	# kt10001(매도)와 동일 방식으로 폴백 키 다중 시도. ka10001 사고와 같은 필드명 가정 회피.
+	# 주문번호 추출 — extract_order_no 헬퍼 사용 (단위 테스트 가능).
 	order_no = None
 	if return_code == 0:
-		output = response_data.get('output', {})
-		if isinstance(output, dict):
-			order_no = output.get('ODNO')
-		if not order_no:
-			# 최상위 + 다른 표기 폴백
-			order_no = (
-				response_data.get('ODNO')
-				or response_data.get('odno')
-				or response_data.get('order_no')
-				or response_data.get('orderNo')
-			)
+		order_no = extract_order_no(response_data)
 
 		# ord_no 추출 실패 긴급 알림 — return_code OK인데 봇이 주문번호 못 잡은 케이스
 		if not order_no:
