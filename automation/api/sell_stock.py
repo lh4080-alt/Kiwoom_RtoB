@@ -9,6 +9,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import utils.config as config
 from utils.rate_limiter import requests
 from api.login import fn_au10001 as get_token
+from utils.get_setting import get_setting
+from api.buy_stock import extract_order_no  # kt10000/kt10001 동일 응답 형식 추정 — 공용 헬퍼
 
 # 수동 매도 주문 체결 대기를 위한 이벤트 딕셔너리
 # Key: 주문번호 (문자열), Value: asyncio.Event
@@ -84,25 +86,41 @@ async def fn_kt10001(stk_cd, ord_qty, cont_yn='N', next_key='', token=None, pric
 	print('Body:', json.dumps(response_data, indent=4, ensure_ascii=False))  # JSON 응답을 파싱하여 출력
 
 	return_code = response_data.get('return_code')
+
+	# kt10001 raw 응답 dump — settings.json `kt10001_raw_dump` 토글 (default False).
+	# kt10000 진단 흐름과 동일 패턴. 5/27 첫 매도 시 응답 형식 확인 필요하면 켜기.
+	if get_setting('kt10001_raw_dump', False):
+		raw_preview = json.dumps(response_data, ensure_ascii=False)[:300]
+		print(f"[kt10001 raw] {stk_cd}: {json.dumps(response_data, ensure_ascii=False)}")
+		try:
+			from telegram.tel_send import tel_send
+			await tel_send(f"🔍 kt10001 raw ({stk_cd}): {raw_preview}")
+		except Exception as e:
+			print(f"[kt10001 raw] 텔레그램 알림 실패: {e}")
+
+	# 주문번호 추출 — kt10000과 동일 헬퍼 (5/26 정답 키 'ord_no' 확정).
 	order_no = None
-	
-	# 주문번호 추출 (ODNO 키에서 가져오거나, 다른 키에서 찾기)
 	if return_code == '0' or return_code == 0:
-		# 응답 데이터에서 주문번호 찾기
-		order_no = response_data.get('ODNO')
-		if order_no is None:
-			# 다른 가능한 키들 확인
-			order_no = response_data.get('odno') or response_data.get('order_no') or response_data.get('orderNo')
-		
-		# 주문번호를 문자열로 변환 (앞의 0 제거를 위해 정수 변환 후 다시 문자열로)
+		order_no = extract_order_no(response_data)
 		if order_no is not None:
 			try:
-				# 숫자로 변환 가능하면 정수로 변환 후 문자열로 (앞의 0 제거)
 				order_no = str(int(str(order_no).strip()))
 			except (ValueError, TypeError):
-				# 숫자로 변환 불가능하면 그대로 문자열로
 				order_no = str(order_no).strip()
-	
+
+		# ord_no 추출 실패 긴급 알림 — kt10000과 동일 패턴
+		if not order_no:
+			try:
+				from telegram.tel_send import tel_send
+				raw_500 = json.dumps(response_data, ensure_ascii=False)[:500]
+				await tel_send(
+					f"🚨 [긴급] {stk_cd} 매도 응답 OK인데 ord_no 추출 실패!\n"
+					f"raw: {raw_500}\n"
+					f"수동 확인 + holdings 보정 필요"
+				)
+			except Exception as e:
+				print(f"[kt10001 긴급] 텔레그램 알림 실패: {e}")
+
 	return return_code, order_no
 
 # 실행 구간

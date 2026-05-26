@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import utils.config as config
 from utils.rate_limiter import requests
 from api.login import fn_au10001 as get_token
+from utils.get_setting import get_setting
 
 # 주문 취소
 async def fn_sc10002(stk_cd, orgn_ord_no, ord_qty, dmst_stex_tp='KRX', token=None):
@@ -52,6 +53,16 @@ async def fn_sc10002(stk_cd, orgn_ord_no, ord_qty, dmst_stex_tp='KRX', token=Non
 	print('Header:', json.dumps({key: response.headers.get(key) for key in ['api-id', 'tr_cont']}, indent=4, ensure_ascii=False))
 	response_data = response.json()
 	print('Body:', json.dumps(response_data, indent=4, ensure_ascii=False))  # JSON 응답을 파싱하여 출력
+
+	# kt10003 raw 응답 dump — settings.json `kt10003_raw_dump` 토글 (default False).
+	# 09:30 미체결 취소 사고 시 즉시 진단 가능. kt10000/kt10001과 동일 패턴.
+	if get_setting('kt10003_raw_dump', False):
+		raw_preview = json.dumps(response_data, ensure_ascii=False)[:300]
+		try:
+			from telegram.tel_send import tel_send
+			await tel_send(f"🔍 kt10003 raw ({stk_cd}): {raw_preview}")
+		except Exception as e:
+			print(f"[kt10003 raw] 텔레그램 알림 실패: {e}")
 
 	return response_data.get('return_code')
 
