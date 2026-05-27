@@ -147,7 +147,15 @@ class ChatCommand:
 						await self.background_task_manager.start_features([1], token)
 					except Exception as e:
 						print(f"재연결 후 기능 1 복구 중 오류: {type(e).__name__}: {e}")
-				
+
+				# ★ 5/27 사고 회피: 재연결 후 holdings 0B 재등록 (손절 모니터링 복구).
+				# 매수 직후 WebSocket 끊긴 케이스 — 재연결만 하고 0B 등록 안 하면
+				# holdings_manager.on_0b_quote 호출 안 됨 → 손절 무작동.
+				try:
+					await self.holdings_manager._register_existing_holdings_0b()
+				except Exception as e:
+					print(f"재연결 후 holdings 0B 재등록 오류: {type(e).__name__}: {e}")
+
 				# 장 시간 외에는 메시지를 보내지 않음
 				if MarketHour.is_market_open_time():
 					await tel_send("✅ 서버 연결이 복구되었습니다.")
@@ -208,6 +216,13 @@ class ChatCommand:
 			await self.background_task_manager.on_relogin_complete(new_token, active_features_before_relogin)
 		except Exception as e:
 			print(f"재로그인 완료 콜백 실행 중 오류: {e}")
+
+		# ★ 5/27 사고 회피: 재로그인 후 holdings 0B 재등록 (손절 모니터링 복구).
+		# 08:59 _relogin_scheduler → 새 토큰 + 새 WebSocket이면 옛 0B 등록 무효화 가능.
+		try:
+			await self.holdings_manager._register_existing_holdings_0b()
+		except Exception as e:
+			print(f"재로그인 후 holdings 0B 재등록 오류: {type(e).__name__}: {e}")
 	
 	async def start(self, is_paper_trading=True, feature_numbers=None):
 		"""start 명령어를 처리합니다."""

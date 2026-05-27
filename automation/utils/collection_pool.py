@@ -119,3 +119,26 @@ def clear_pool() -> int:
 	count = len(pool)
 	_save({})
 	return count
+
+
+def pool_has_today_entry(pool: dict, today_str: str) -> bool:
+	"""풀에 오늘 누적 entry가 있는지 — startup 풀 보존 분기 판단용.
+
+	5/22 21건, 5/26 27건 손실 사고 회피: 봇 재시작 시 무조건 clear_pool 하던 패턴 변경 →
+	last_seen 날짜가 오늘이면 보존, 어제 이전이면 잔재로 보고 clear.
+
+	Args:
+		pool: collection_pool dict ({code: entry})
+		today_str: 'YYYY-MM-DD' 형식
+
+	Returns:
+		True: 오늘 entry 1개 이상 존재 (보존)
+		False: 비어있거나 어제 이전 entry만 (clear 대상)
+	"""
+	if not isinstance(pool, dict) or not pool:
+		return False
+	for entry in pool.values():
+		last_seen = str(entry.get('last_seen', '') or '')
+		if last_seen.startswith(today_str):
+			return True
+	return False

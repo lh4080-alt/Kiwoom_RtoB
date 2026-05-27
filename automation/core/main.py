@@ -322,13 +322,22 @@ class MainApp:
 		except Exception as e:
 			print(f"Step C 모듈 시작 실패: {e}")
 
-		# Startup reset hook — 영구 원칙 강화: 이전 세션 잔재 비우기
+		# Startup reset hook — 5/22, 5/26 풀 손실 사고 회피: 같은 날 데이터면 보존,
+		# 어제 이전 잔재만 clear. last_seen 날짜로 분기.
 		try:
-			from utils.collection_pool import clear_pool
-			cleared = clear_pool()
-			print(f"[startup] collection_pool cleared: {cleared} entries")
+			from utils.collection_pool import get_pool, clear_pool, pool_has_today_entry
+			pool = get_pool()
+			if not pool:
+				print(f"[startup] collection_pool 비어있음 (entries=0)")
+			else:
+				today_str = datetime.datetime.now().strftime('%Y-%m-%d')
+				if pool_has_today_entry(pool, today_str):
+					print(f"[startup] collection_pool 보존: {len(pool)} entries (오늘 누적 — 재시작 영향 회피)")
+				else:
+					cleared = clear_pool()
+					print(f"[startup] 어제 이전 잔재 cleared: {cleared} entries")
 		except Exception as e:
-			print(f"[startup] collection_pool clear 실패: {e}")
+			print(f"[startup] collection_pool 처리 실패: {e}")
 
 		# Startup self-test (5/22 사고 후 추가): ka10001 응답 필드 무결성 확인 + 알림
 		try:
