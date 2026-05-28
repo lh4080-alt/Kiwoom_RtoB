@@ -211,6 +211,11 @@ async def report_command(token_manager, settings_manager=None, background_task_m
 			
 			# 보유 종목 요약
 			total_stock_evlt = 0
+			# DEBUG: 첫 종목 필드명 덤프 (1회용 — 확인 후 제거)
+			if account_data:
+				_sample = account_data[0]
+				_fields = ', '.join(f'{k}={v}' for k, v in _sample.items() if k not in ('stk_cd', 'stk_nm'))
+				held_message += f"[DEBUG] {_fields}\n\n"
 			for stk in account_data:
 				evlt = int(stk.get('evlt_amt', 0) or 0)
 				if evlt <= 0:
