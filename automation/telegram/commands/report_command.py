@@ -109,30 +109,6 @@ async def report_command(token_manager, settings_manager=None, background_task_m
 		except Exception as e:
 			balance_message += f"   ⚠️ 자금 조회 실패: {e}\n"
 		
-		# 보유종목 평가 (총자산 계산용 — 아래 보유종목 섹션에서 재사용)
-		account_data = None
-		for _ in range(3):
-			try:
-				account_data = await asyncio.wait_for(
-					fn_kt00004(False, 'N', '', token_manager.token),
-					timeout=10.0
-				)
-				if account_data:
-					break
-			except Exception:
-				await asyncio.sleep(1)
-
-		if account_data:
-			total_stock_evlt = 0
-			for stk in account_data:
-				evlt = int(stk.get('evlt_amt', 0) or 0)
-				if evlt <= 0:
-					evlt = int(stk.get('buy_amt', 0) or 0) + int(stk.get('pl_amt', 0) or 0)
-				total_stock_evlt += evlt
-			total_asset = d2_entra + total_stock_evlt
-			balance_message += f"\n💎 총자산: {total_asset:,}원\n"
-			balance_message += f"   (예수금 {d2_entra:,} + 주식 {total_stock_evlt:,})\n"
-
 		balance_message += "\n" + "="*20 + "\n\n"
 
 		# ---------------------------------------------------------
@@ -188,8 +164,8 @@ async def report_command(token_manager, settings_manager=None, background_task_m
 		# ---------------------------------------------------------
 		# 4. 💰 [보유 종목] - 항상 마지막에 전송
 		# ---------------------------------------------------------
-		if not account_data:
-			while not account_data:
+		account_data = None
+		while not account_data:
 				try:
 					account_data = await asyncio.wait_for(
 						fn_kt00004(False, 'N', '', token_manager.token),
@@ -234,12 +210,21 @@ async def report_command(token_manager, settings_manager=None, background_task_m
 				total_pl_amt += pl_amt
 			
 			# 보유 종목 요약
+			total_stock_evlt = 0
+			for stk in account_data:
+				evlt = int(stk.get('evlt_amt', 0) or 0)
+				if evlt <= 0:
+					evlt = int(stk.get('buy_amt', 0) or 0) + int(stk.get('pl_amt', 0) or 0)
+				total_stock_evlt += evlt
+
 			avg_profit_loss = total_profit_loss / len(account_data) if account_data else 0
 			held_message += f"📋 [보유 종목 요약]\n"
 			held_message += f"   총 보유종목: {len(account_data)}개\n"
 			held_message += f"   ⏳ 주문중: {ordering_holdings_count}개\n"
 			held_message += f"   평균 수익률: {avg_profit_loss:+.2f}%\n"
 			held_message += f"   총 평가손익: {total_pl_amt:,.0f}원\n"
+			held_message += f"\n💎 총자산: {d2_entra + total_stock_evlt:,}원\n"
+			held_message += f"   (예수금 {d2_entra:,} + 주식 {total_stock_evlt:,})\n"
 		else:
 			held_message += "   보유 종목이 없습니다.\n"
 		
