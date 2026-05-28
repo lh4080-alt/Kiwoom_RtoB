@@ -78,14 +78,15 @@ async def report_command(token_manager, settings_manager=None, background_task_m
 		# 1. 💰 [자금 현황] (예수금 상세 현황)
 		# ---------------------------------------------------------
 		balance_message = "💰 [자금 현황]\n\n"
+		d2_entra = 0
 		try:
 			balance_data = await fn_kt00001(token=token_manager.token)
-			
+
 			# balance_data가 딕셔너리인지 확인
 			if balance_data and isinstance(balance_data, dict):
 				# D+0 예수금 (entr)
 				entr_d0 = int(balance_data.get('entr', 0) or 0)
-				
+
 				# D+2 추정예수금 (d2_entra)
 				d2_entra = int(balance_data.get('d2_entra', 0) or 0)
 				
@@ -187,8 +188,8 @@ async def report_command(token_manager, settings_manager=None, background_task_m
 		# ---------------------------------------------------------
 		# 4. 💰 [보유 종목] - 항상 마지막에 전송
 		# ---------------------------------------------------------
-		if account_data is None:
-			while account_data is None:
+		if not account_data:
+			while not account_data:
 				try:
 					account_data = await asyncio.wait_for(
 						fn_kt00004(False, 'N', '', token_manager.token),
