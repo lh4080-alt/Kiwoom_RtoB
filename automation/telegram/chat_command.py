@@ -722,11 +722,18 @@ class ChatCommand:
 			queue_lines.append(f"  • {c} {n}".rstrip())
 		queue_block = "\n".join(queue_lines) if queue_lines else "  (없음)"
 
+		pool_lines = []
+		if isinstance(pool, dict):
+			for code in pool:
+				pn = await get_stock_name(code)
+				pool_lines.append(f"  • {code} {pn}".rstrip())
+		pool_block = "\n".join(pool_lines) if pool_lines else "  (없음)"
+
 		msg = (
 			f"=== 봇 상태 ({_dt.now().strftime('%Y-%m-%d %H:%M:%S')}) ===\n"
 			f"\n📦 매수 대기열 ({len(queue)}건):\n{queue_block}\n"
 			f"\n⏸️ 매수 정지(halt): {'YES' if self.is_halted else 'NO'}\n"
-			f"\n📥 수집풀 누적: {pool_count}종목"
+			f"\n📥 수집풀 누적: {pool_count}종목\n{pool_block}"
 		)
 		await tel_send(msg)
 		return True
