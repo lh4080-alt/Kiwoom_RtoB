@@ -110,13 +110,16 @@ async def report_command(token_manager, settings_manager=None, background_task_m
 		
 		# 보유종목 평가 (총자산 계산용 — 아래 보유종목 섹션에서 재사용)
 		account_data = None
-		try:
-			account_data = await asyncio.wait_for(
-				fn_kt00004(False, 'N', '', token_manager.token),
-				timeout=10.0
-			)
-		except Exception:
-			pass
+		for _ in range(3):
+			try:
+				account_data = await asyncio.wait_for(
+					fn_kt00004(False, 'N', '', token_manager.token),
+					timeout=10.0
+				)
+				if account_data is not None:
+					break
+			except Exception:
+				await asyncio.sleep(1)
 
 		if account_data:
 			total_stock_evlt = 0
