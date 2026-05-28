@@ -108,8 +108,29 @@ async def report_command(token_manager, settings_manager=None, background_task_m
 		except Exception as e:
 			balance_message += f"   ⚠️ 자금 조회 실패: {e}\n"
 		
+		# 보유종목 평가 (총자산 계산용 — 아래 보유종목 섹션에서 재사용)
+		account_data = None
+		try:
+			account_data = await asyncio.wait_for(
+				fn_kt00004(False, 'N', '', token_manager.token),
+				timeout=10.0
+			)
+		except Exception:
+			pass
+
+		if account_data:
+			total_stock_evlt = 0
+			for stk in account_data:
+				evlt = int(stk.get('evlt_amt', 0) or 0)
+				if evlt <= 0:
+					evlt = int(stk.get('buy_amt', 0) or 0) + int(stk.get('pl_amt', 0) or 0)
+				total_stock_evlt += evlt
+			total_asset = d2_entra + total_stock_evlt
+			balance_message += f"\n💎 총자산: {total_asset:,}원\n"
+			balance_message += f"   (예수금 {d2_entra:,} + 주식 {total_stock_evlt:,})\n"
+
 		balance_message += "\n" + "="*20 + "\n\n"
-		
+
 		# ---------------------------------------------------------
 		# 2. ⏳ [미체결 내역]
 		# ---------------------------------------------------------
@@ -163,18 +184,17 @@ async def report_command(token_manager, settings_manager=None, background_task_m
 		# ---------------------------------------------------------
 		# 4. 💰 [보유 종목] - 항상 마지막에 전송
 		# ---------------------------------------------------------
-		account_data = None
-		while account_data is None:
-			try:
-				account_data = await asyncio.wait_for(
-					fn_kt00004(False, 'N', '', token_manager.token),
-					timeout=10.0
-				)
-			except (asyncio.TimeoutError, Exception) as e:
-				# 오류 발생 시 텔레그램 메시지 보내지 않고 1초 후 재시도
-				await asyncio.sleep(1)
-				continue
-		
+		if account_data is None:
+			while account_data is None:
+				try:
+					account_data = await asyncio.wait_for(
+						fn_kt00004(False, 'N', '', token_manager.token),
+						timeout=10.0
+					)
+				except (asyncio.TimeoutError, Exception):
+					await asyncio.sleep(1)
+					continue
+
 		held_message = "💰 [보유 종목]\n\n"
 		if account_data:
 			total_profit_loss = 0
