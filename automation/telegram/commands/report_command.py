@@ -116,7 +116,7 @@ async def report_command(token_manager, settings_manager=None, background_task_m
 					fn_kt00004(False, 'N', '', token_manager.token),
 					timeout=10.0
 				)
-				if account_data is not None:
+				if account_data:
 					break
 			except Exception:
 				await asyncio.sleep(1)
