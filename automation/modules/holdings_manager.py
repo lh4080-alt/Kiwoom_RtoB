@@ -36,6 +36,11 @@ class HoldingsManager:
 
 	def start(self):
 		"""봇 startup 시 호출. 모니터링 task 시작."""
+		asyncio.create_task(self._register_existing_holdings_0b())
+		from utils.get_setting import get_setting
+		if not get_setting('holdings_manager_enabled', True):
+			logger.info("HoldingsManager 비활성 (settings: holdings_manager_enabled=false)")
+			return
 		if self._task is None or self._task.done():
 			self._task = asyncio.create_task(self._deadline_loop())
 		if self._loss_check_task is None or self._loss_check_task.done():
@@ -53,6 +58,9 @@ class HoldingsManager:
 	async def on_0b_quote(self, code: str, current_price: int):
 		"""0B push 수신 시 호출. 손절선 도달 시 시장가 매도."""
 		if not code or not current_price:
+			return
+		from utils.get_setting import get_setting
+		if not get_setting('holdings_manager_enabled', True):
 			return
 		if code in self._selling_codes:
 			return
@@ -82,8 +90,6 @@ class HoldingsManager:
 	# 시한 도달 매도 (1분 주기)
 	# ─────────────────────────────────────────────────────────
 	async def _deadline_loop(self):
-		# 첫 iteration에서 기존 holdings 0B 등록 (봇 재시작 시점 잔존 보유 대응)
-		await self._register_existing_holdings_0b()
 		while True:
 			try:
 				now = datetime.now()

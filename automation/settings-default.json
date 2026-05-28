@@ -24,5 +24,6 @@
   "grid_fixed_amount": 100000.0,
   "grid_watch_list": [],
   "trailing_min_profit": 0.0,
-  "fcond_rules": {}
+  "fcond_rules": {},
+  "holdings_manager_enabled": true
 }
