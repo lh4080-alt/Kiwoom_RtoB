@@ -594,59 +594,63 @@ class ChatCommand:
 	# ─────────────────────────────────────────────────────────
 	# Phase 2 Step B — pick/cancel/status 헬퍼 (영속화 함수 사용)
 	# ─────────────────────────────────────────────────────────
-	async def _cmd_pick(self, codes: list) -> bool:
+	async def _cmd_pick(self, args: list) -> bool:
 		"""매수 후보 종목을 buy_queue(파일 영속화)에 추가.
+
+		사용법 (원본 buy_command 위치인자 방식):
+		  pick <종목코드>          → 1주
+		  pick <종목코드> <수량>   → 지정 수량 (예: pick 005930 5 → 5주)
 
 		이미 보유 중인 종목(pending_fill / filled)은 등록 차단.
 		"""
-		import re
-		valid_re = re.compile(r'^\d{6}$')
 		from utils.collection_pool import get_stock_name
 		from utils.buy_queue import add_to_queue, load_queue
 		from utils.holdings import load_holdings
 
-		if not codes:
-			await tel_send("❌ 사용법: pick <종목코드1> [종목코드2] ...")
+		if not args:
+			await tel_send("❌ 사용법: pick <종목코드> [수량]\n예: pick 005930 5")
 			return False
+
+		# 종목코드 검증 (원본 buy_command과 동일)
+		code = str(args[0]).strip()
+		if not code.isdigit() or len(code) != 6:
+			await tel_send(f"❌ 종목코드는 6자리 숫자여야 합니다. (입력: {code})")
+			return False
+
+		# 수량 파싱 (원본 buy_command Case 2 패턴)
+		qty = 1
+		if len(args) >= 2:
+			try:
+				qty = int(args[1])
+				if qty <= 0:
+					await tel_send("❌ 수량은 1 이상이어야 합니다.")
+					return False
+			except (ValueError, TypeError):
+				await tel_send(f"❌ 수량은 숫자여야 합니다. (입력: {args[1]})")
+				return False
 
 		# 현재 보유 종목 조회 — 매수 대상 차단용
 		held = await load_holdings()
 		held_codes = {h['code'] for h in held if h.get('status') in ('pending_fill', 'filled')}
+		if code in held_codes:
+			await tel_send(f"⚠️ {code} 이미 보유 중 — 매수 후보 등록 차단")
+			return False
 
-		added, duplicate, invalid, already_held = [], [], [], []
-		for code in codes:
-			c = str(code).strip()
-			if not valid_re.match(c):
-				invalid.append(c)
-				continue
-			if c in held_codes:
-				already_held.append(c)
-				continue
-			if await add_to_queue(c, approved_by='telegram'):
-				added.append(c)
-			else:
-				duplicate.append(c)
+		name = await get_stock_name(code)
+		label = f"{code} {name}" if name else code
 
-		queue = await load_queue()
-
-		async def _with_name(c):
-			n = await get_stock_name(c)
-			return f"{c} {n}" if n else c
-
-		lines = [
-			f"📋 [매수 후보 승인] 추가 {len(added)} / 중복 {len(duplicate)} / 보유차단 {len(already_held)} / 무효 {len(invalid)}"
-		]
-		if added:
-			named = [await _with_name(c) for c in added]
-			lines.append("✅ 추가: " + ", ".join(named))
-		if duplicate:
-			lines.append("♻️ 중복: " + ", ".join(duplicate))
-		if already_held:
-			lines.append("⚠️ 이미 보유 중: " + ", ".join(already_held))
-		if invalid:
-			lines.append("❌ 무효(6자리 숫자 필요): " + ", ".join(invalid))
-		lines.append(f"\n📦 매수 대기열 총 {len(queue)}건")
-		await tel_send("\n".join(lines))
+		if await add_to_queue(code, approved_by='telegram', qty=qty):
+			queue = await load_queue()
+			await tel_send(
+				f"✅ [매수 후보 승인] {label} {qty}주\n"
+				f"📦 매수 대기열 총 {len(queue)}건"
+			)
+		else:
+			queue = await load_queue()
+			await tel_send(
+				f"♻️ {label} 이미 매수 대기열에 있음\n"
+				f"📦 매수 대기열 총 {len(queue)}건"
+			)
 		return True
 
 	async def _cmd_cancel(self, code: str) -> bool:

@@ -282,11 +282,12 @@ class WatchingBuyer:
 			return
 
 		limit_price = bid
+		qty = int(entry.get('qty', 1) or 1)
 		token = await self.bot.token_manager.get_token()
 		try:
 			return_code, ord_no = await fn_kt10000(
 				stk_cd=code,
-				ord_qty=ORDER_QTY,
+				ord_qty=qty,
 				ord_uv=limit_price,
 				token=token,
 				order_type='limit',
@@ -305,7 +306,7 @@ class WatchingBuyer:
 		await add_holding({
 			'code': code,
 			'buy_price': limit_price,
-			'buy_qty': ORDER_QTY,
+			'buy_qty': qty,
 			'buy_date': today,
 			'buy_datetime': datetime.now().isoformat(timespec='seconds'),
 			'ord_no': str(ord_no) if ord_no else '',
@@ -322,7 +323,7 @@ class WatchingBuyer:
 			logger.exception(f"[watching_buyer] {code} 0B 등록 실패")
 
 		hhmm = datetime.now().strftime('%H:%M')
-		await tel_send(f"✅ {code} 감시 매수 완료 @ {limit_price:,}원 ({ORDER_QTY}주, {hhmm})")
+		await tel_send(f"✅ {code} 감시 매수 완료 @ {limit_price:,}원 ({qty}주, {hhmm})")
 		logger.info(f"[watching_buyer] {code} 매수 성공 @ {limit_price}")
 
 	async def _record_failure(self, code: str, entry: dict, rc):

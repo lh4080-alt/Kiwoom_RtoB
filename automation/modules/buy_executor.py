@@ -155,7 +155,9 @@ class BuyExecutor:
 		codes_to_buy = [item['code'] for item in queue[:MAX_BUYS_PER_DAY]]
 		# approved_at 보존 — 차단 시 watching 큐로 이동할 때 사용
 		approved_map = {item['code']: item.get('approved_at') for item in queue[:MAX_BUYS_PER_DAY]}
-		logger.info(f"[buy_executor] 매수 대상 {len(codes_to_buy)}건: {codes_to_buy}")
+		# 종목별 매수 수량 (pick <코드> <수량>)
+		qty_map = {item['code']: int(item.get('qty', 1) or 1) for item in queue[:MAX_BUYS_PER_DAY]}
+		logger.info(f"[buy_executor] 매수 대상 {len(codes_to_buy)}건: {codes_to_buy} (qty={qty_map})")
 
 		token = await self.bot.token_manager.get_token()
 		if not token:
@@ -163,7 +165,7 @@ class BuyExecutor:
 			return
 
 		results = await asyncio.gather(
-			*[self._buy_one(code, token) for code in codes_to_buy],
+			*[self._buy_one(code, token, qty_map.get(code, 1)) for code in codes_to_buy],
 			return_exceptions=True,
 		)
 
@@ -179,7 +181,7 @@ class BuyExecutor:
 				await add_holding({
 					'code': code,
 					'buy_price': result['price'],
-					'buy_qty': ORDER_QTY,
+					'buy_qty': qty_map.get(code, 1),
 					'buy_date': today,
 					'buy_datetime': datetime.now().isoformat(timespec='seconds'),
 					'ord_no': result.get('ord_no', ''),
@@ -198,6 +200,7 @@ class BuyExecutor:
 					await add_to_watching({
 						'code': code,
 						'approved_at': approved_map.get(code),
+						'qty': qty_map.get(code, 1),
 						'blocked_at': datetime.now().isoformat(timespec='seconds'),
 						'block_reason': status,
 						'block_ratio': ratio,
@@ -224,7 +227,7 @@ class BuyExecutor:
 		# 텔레그램 알림
 		lines = [f"📦 [09:00 매수 결과] 주문 {len(success)} / 차단 {len(blocked)} / 실패 {len(failed)}"]
 		for r in success:
-			lines.append(f"  ✅ {r['code']} @ {r['price']:,}원 (ord_no {r.get('ord_no','-')})")
+			lines.append(f"  ✅ {r['code']} {qty_map.get(r['code'], 1)}주 @ {r['price']:,}원 (ord_no {r.get('ord_no','-')})")
 		for code, reason, info in blocked:
 			ratio_str = ""
 			if 'open' in info and 'prev' in info and info['prev']:
@@ -252,7 +255,7 @@ class BuyExecutor:
 		asyncio.create_task(self._cancel_unfilled_at_0930())
 		asyncio.create_task(self._verify_holdings_against_account_at_0935())
 
-	async def _buy_one(self, code: str, token: str) -> dict:
+	async def _buy_one(self, code: str, token: str, qty: int = 1) -> dict:
 		"""단일 종목 매수.
 
 		원본 키움 봇 chk_n_buy 패턴 + 우리 보강(갭/halt/pnl) 통합:
@@ -340,7 +343,7 @@ class BuyExecutor:
 			# ── 매수 주문 (ka10004 호가 그대로 → 호가 위반 불가)
 			return_code, ord_no = await fn_kt10000(
 				stk_cd=code,
-				ord_qty=ORDER_QTY,
+				ord_qty=qty,
 				ord_uv=bid,
 				token=token,
 				order_type='limit',

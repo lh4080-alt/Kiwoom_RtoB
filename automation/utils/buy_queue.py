@@ -55,7 +55,7 @@ async def save_queue(queue: list) -> None:
 		_save_sync(queue)
 
 
-async def add_to_queue(code: str, approved_by: str = 'telegram') -> bool:
+async def add_to_queue(code: str, approved_by: str = 'telegram', qty: int = 1) -> bool:
 	"""종목 추가. 중복이면 False."""
 	async with _lock:
 		queue = _load_sync()
@@ -63,6 +63,7 @@ async def add_to_queue(code: str, approved_by: str = 'telegram') -> bool:
 			return False
 		queue.append({
 			'code': code,
+			'qty': int(qty) if qty and int(qty) >= 1 else 1,
 			'approved_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
 			'approved_by': approved_by,
 		})
