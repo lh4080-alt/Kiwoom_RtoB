@@ -2,10 +2,12 @@
 stick 매일 반복 매수 + 동시호가 매도.
 
 흐름:
-  08:30~08:45  pre-market 체크 — SOX + NQ 등락률 조회 (yfinance)
-               둘 다 ≥ MIN_RISE_PCT → stick 종목들 buy_queue에 추가 (source='stick')
-               하나라도 미달 → 그날 stick 스킵 + 알림
+  08:30~08:45  pre-market 체크 — SOX + NVDA + MU 등락률 조회 (yfinance)
+               3개 중 2개 이상 ≥ MIN_RISE_PCT → stick 종목들 buy_queue 추가 (다수결)
+               2개 미만 상승 → 그날 stick 스킵 + 알림
                yfinance 실패 → 1분 간격 최대 3회 재시도 후 스킵
+               * SK하이닉스 등 메모리/HBM 종목 매수 신호 3종 다수결:
+                 SOX (섹터), NVDA (HBM 수요), MU (DRAM/NAND 사이클)
   09:00       기존 buy_executor가 buy_queue 처리 (8단계 필터, source='stick'은 held 우회)
   15:20       당일 stick 매수 종목 시장가 매도 (동시호가)
   15:25       15:20 실패 시 1회 재시도
@@ -27,7 +29,8 @@ CLOSING_AUCTION_FIRST = time(15, 20)
 CLOSING_AUCTION_RETRY = time(15, 25)
 CLOSING_AUCTION_END = time(15, 30)
 
-MIN_RISE_PCT = 0.3                 # SOX & NQ 둘 다 +0.3% 이상이어야 매수
+MIN_RISE_PCT = 0.3                 # 종목별 +0.3% 이상이면 "상승" 카운트
+MIN_RISING_COUNT = 2               # 3종목(SOX/NVDA/MU) 중 N개 이상 상승 시 매수
 MAX_FETCH_RETRIES = 3              # yfinance 실패 시 재시도 횟수
 FETCH_RETRY_GAP_SEC = 60           # 재시도 간격 (1분)
 LOOP_SLEEP_SEC = 30                # 스케줄러 폴링 간격
@@ -36,25 +39,35 @@ LOOP_SLEEP_SEC = 30                # 스케줄러 폴링 간격
 # ─────────────────────────────────────────────────────────
 # Pure helpers (단위 테스트용)
 # ─────────────────────────────────────────────────────────
-def evaluate_pre_market(sox_pct, nq_pct, threshold: float = MIN_RISE_PCT) -> dict:
-	"""SOX/NQ 등락률 평가.
+def evaluate_pre_market(sox_pct, nvda_pct, mu_pct,
+                        threshold: float = MIN_RISE_PCT,
+                        min_count: int = MIN_RISING_COUNT) -> dict:
+	"""SOX/NVDA/MU 등락률 다수결 평가 (3종목 중 min_count 이상 상승 → pass).
+
+	None인 종목은 "상승 아님"으로 카운트 (보수적).
+	모두 None이면 fetch_ok=False.
 
 	Returns: {
-	  'fetch_ok': bool,    # 둘 다 None 아닌지
-	  'sox_ok': bool,
-	  'nq_ok': bool,
-	  'pass': bool,        # 매수 진행 조건 (fetch_ok AND sox_ok AND nq_ok)
+	  'fetch_ok': bool,    # 최소 1개라도 fetch 성공
+	  'sox_ok' / 'nvda_ok' / 'mu_ok': bool,
+	  'rising_count': int,
+	  'pass': bool,
 	}
 	"""
-	if sox_pct is None or nq_pct is None:
-		return {'fetch_ok': False, 'sox_ok': False, 'nq_ok': False, 'pass': False}
-	sox_ok = sox_pct >= threshold
-	nq_ok = nq_pct >= threshold
+	if sox_pct is None and nvda_pct is None and mu_pct is None:
+		return {'fetch_ok': False, 'sox_ok': False, 'nvda_ok': False, 'mu_ok': False,
+		        'rising_count': 0, 'pass': False}
+	sox_ok = sox_pct is not None and sox_pct >= threshold
+	nvda_ok = nvda_pct is not None and nvda_pct >= threshold
+	mu_ok = mu_pct is not None and mu_pct >= threshold
+	rising_count = int(sox_ok) + int(nvda_ok) + int(mu_ok)
 	return {
 		'fetch_ok': True,
 		'sox_ok': sox_ok,
-		'nq_ok': nq_ok,
-		'pass': sox_ok and nq_ok,
+		'nvda_ok': nvda_ok,
+		'mu_ok': mu_ok,
+		'rising_count': rising_count,
+		'pass': rising_count >= min_count,
 	}
 
 
@@ -191,8 +204,8 @@ class StickExecutor:
 				await asyncio.sleep(60)
 
 	async def _do_pre_market_check(self, now: datetime):
-		"""SOX/NQ 등락률 조회 → 조건 충족 시 stick 종목들 buy_queue 추가."""
-		from api.external_index import fetch_sox_nq
+		"""SOX/NVDA/MU 등락률 조회 → 다수결(3중 2 이상 상승) 시 stick 종목들 buy_queue 추가."""
+		from api.external_index import fetch_semi_trio
 		from telegram.tel_send import tel_send
 		from utils.stick_list import load_stick
 		from utils.buy_queue import add_to_queue, load_queue
@@ -201,46 +214,57 @@ class StickExecutor:
 		self._last_fetch_attempt_at = now
 		logger.info(f"[stick] pre-market 체크 시도 {self._fetch_attempts}/{MAX_FETCH_RETRIES}")
 
-		result = await fetch_sox_nq()
+		result = await fetch_semi_trio()
 		sox = result.get('sox')
-		nq = result.get('nq')
+		nvda = result.get('nvda')
+		mu = result.get('mu')
 
-		if sox is None or nq is None:
-			# 실패 — 재시도 대기 또는 최종 스킵
+		eval_result = evaluate_pre_market(sox, nvda, mu)
+
+		# 3개 모두 fetch 실패 → 재시도 또는 최종 스킵
+		if not eval_result['fetch_ok']:
 			if self._fetch_attempts >= MAX_FETCH_RETRIES:
-				self._fetched_today = True  # 더 시도 안 함
+				self._fetched_today = True
 				await tel_send(
 					f"❌ [stick 데이터 실패] yfinance {MAX_FETCH_RETRIES}회 재시도 실패\n"
-					f"SOX={sox} / NQ={nq}\n"
+					f"SOX={sox} / NVDA={nvda} / MU={mu}\n"
 					f"오늘 stick 매수 스킵"
 				)
 				logger.warning(f"[stick] {MAX_FETCH_RETRIES}회 실패 — 스킵")
 			else:
-				logger.warning(f"[stick] fetch 실패 (sox={sox}, nq={nq}) — {FETCH_RETRY_GAP_SEC}초 후 재시도")
+				logger.warning(f"[stick] 전체 fetch 실패 — {FETCH_RETRY_GAP_SEC}초 후 재시도")
 			return
 
-		# fetch 성공 — 조건 평가
-		self._fetched_today = True
-		sox_ok = sox >= MIN_RISE_PCT
-		nq_ok = nq >= MIN_RISE_PCT
+		# 평가 결과 표시용 라인
+		def _fmt(name, pct, ok):
+			if pct is None:
+				return f"{name} fetch 실패 ❌"
+			return f"{name} {pct:+.2f}% {'✅' if ok else '❌'}"
 
-		if not (sox_ok and nq_ok):
-			fail_msgs = []
-			fail_msgs.append(f"SOX {sox:+.2f}% {'✅' if sox_ok else '❌'}")
-			fail_msgs.append(f"NQ {nq:+.2f}% {'✅' if nq_ok else '❌'}")
+		status_line = " / ".join([
+			_fmt('SOX', sox, eval_result['sox_ok']),
+			_fmt('NVDA', nvda, eval_result['nvda_ok']),
+			_fmt('MU', mu, eval_result['mu_ok']),
+		])
+
+		self._fetched_today = True
+
+		if not eval_result['pass']:
 			await tel_send(
-				f"⏸️ [stick 조건 미달] (기준 +{MIN_RISE_PCT}%)\n"
-				f"  {' / '.join(fail_msgs)}\n"
+				f"⏸️ [stick 조건 미달] 상승 {eval_result['rising_count']}/3 "
+				f"(기준 {MIN_RISING_COUNT}/3 이상, 각 +{MIN_RISE_PCT}%↑)\n"
+				f"  {status_line}\n"
 				f"→ 오늘 stick 매수 스킵"
 			)
-			logger.info(f"[stick] 조건 미달: sox={sox:.2f}%, nq={nq:.2f}%")
+			logger.info(f"[stick] 조건 미달 ({eval_result['rising_count']}/3): {status_line}")
 			return
 
 		# 조건 충족 — stick 종목들 buy_queue에 추가
 		items = await load_stick()
 		if not items:
 			await tel_send(
-				f"✅ [stick 조건 충족] SOX {sox:+.2f}% / NQ {nq:+.2f}%\n"
+				f"✅ [stick 조건 충족] 상승 {eval_result['rising_count']}/3\n"
+				f"  {status_line}\n"
 				f"⚠️ 등록된 stick 종목 없음"
 			)
 			logger.info("[stick] stick_list 비어있음")
@@ -260,7 +284,8 @@ class StickExecutor:
 
 		queue = await load_queue()
 		lines = [
-			f"✅ [stick 조건 충족] SOX {sox:+.2f}% / NQ {nq:+.2f}%",
+			f"✅ [stick 조건 충족] 상승 {eval_result['rising_count']}/3",
+			f"  {status_line}",
 			f"stick 매수 대기열 진입: 추가 {len(added)} / 중복 {len(duplicate)}",
 		]
 		if added:

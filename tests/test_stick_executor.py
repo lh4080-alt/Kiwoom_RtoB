@@ -11,44 +11,75 @@ if str(_AUTOMATION) not in sys.path:
 
 
 class TestEvaluatePreMarket:
+	"""3종목 (SOX/NVDA/MU) 다수결 — 기본 임계값 0.3%, 최소 상승 2/3."""
 
-	def test_both_pass(self):
+	def test_all_three_pass(self):
 		from modules.stick_executor import evaluate_pre_market
-		r = evaluate_pre_market(0.5, 0.4)
-		assert r == {'fetch_ok': True, 'sox_ok': True, 'nq_ok': True, 'pass': True}
-
-	def test_sox_fail(self):
-		from modules.stick_executor import evaluate_pre_market
-		r = evaluate_pre_market(0.1, 0.5)
-		assert r == {'fetch_ok': True, 'sox_ok': False, 'nq_ok': True, 'pass': False}
-
-	def test_nq_fail(self):
-		from modules.stick_executor import evaluate_pre_market
-		r = evaluate_pre_market(0.5, 0.1)
-		assert r == {'fetch_ok': True, 'sox_ok': True, 'nq_ok': False, 'pass': False}
-
-	def test_both_fail(self):
-		from modules.stick_executor import evaluate_pre_market
-		r = evaluate_pre_market(-0.5, -0.3)
-		assert r['pass'] is False
-		assert r['sox_ok'] is False
-		assert r['nq_ok'] is False
-
-	def test_exact_threshold(self):
-		"""+0.3% 정확히 = 통과 (>= 비교)."""
-		from modules.stick_executor import evaluate_pre_market
-		r = evaluate_pre_market(0.3, 0.3)
+		r = evaluate_pre_market(0.5, 0.4, 0.6)
+		assert r['rising_count'] == 3
 		assert r['pass'] is True
 
-	def test_fetch_fail_none(self):
+	def test_two_of_three_pass(self):
+		"""SOX/NVDA 통과, MU 미달 → 2/3 통과 (pass)."""
 		from modules.stick_executor import evaluate_pre_market
-		r = evaluate_pre_market(None, 0.5)
-		assert r == {'fetch_ok': False, 'sox_ok': False, 'nq_ok': False, 'pass': False}
+		r = evaluate_pre_market(0.5, 0.4, 0.1)
+		assert r['rising_count'] == 2
+		assert r['pass'] is True
+
+	def test_one_of_three_fail(self):
+		"""SOX만 통과 → 1/3 → 미달."""
+		from modules.stick_executor import evaluate_pre_market
+		r = evaluate_pre_market(0.5, 0.1, 0.1)
+		assert r['rising_count'] == 1
+		assert r['pass'] is False
+
+	def test_all_fail(self):
+		from modules.stick_executor import evaluate_pre_market
+		r = evaluate_pre_market(-0.5, -0.3, -0.4)
+		assert r['rising_count'] == 0
+		assert r['pass'] is False
+
+	def test_exact_threshold(self):
+		"""+0.3% 정확히 = 상승 (>= 비교)."""
+		from modules.stick_executor import evaluate_pre_market
+		r = evaluate_pre_market(0.3, 0.3, 0.3)
+		assert r['rising_count'] == 3
+		assert r['pass'] is True
+
+	def test_all_none_fetch_fail(self):
+		"""모든 종목 fetch 실패 → fetch_ok=False."""
+		from modules.stick_executor import evaluate_pre_market
+		r = evaluate_pre_market(None, None, None)
+		assert r['fetch_ok'] is False
+		assert r['pass'] is False
+
+	def test_partial_fetch_fail_counts_as_not_rising(self):
+		"""SOX/NVDA 통과 + MU fetch 실패 → fetch_ok=True, rising=2 → pass."""
+		from modules.stick_executor import evaluate_pre_market
+		r = evaluate_pre_market(0.5, 0.4, None)
+		assert r['fetch_ok'] is True
+		assert r['mu_ok'] is False
+		assert r['rising_count'] == 2
+		assert r['pass'] is True
+
+	def test_two_none_one_pass_fails(self):
+		"""SOX 1개만 통과 + 나머지 둘 fetch 실패 → fetch_ok=True, rising=1 → 미달."""
+		from modules.stick_executor import evaluate_pre_market
+		r = evaluate_pre_market(0.5, None, None)
+		assert r['fetch_ok'] is True
+		assert r['rising_count'] == 1
+		assert r['pass'] is False
 
 	def test_custom_threshold(self):
 		from modules.stick_executor import evaluate_pre_market
-		r = evaluate_pre_market(0.5, 0.5, threshold=1.0)
-		assert r['pass'] is False  # 0.5% < 1.0%
+		r = evaluate_pre_market(0.5, 0.5, 0.5, threshold=1.0)
+		assert r['pass'] is False  # 모두 0.5% < 1.0% → rising_count=0
+
+	def test_custom_min_count_3_of_3(self):
+		"""min_count=3 — 3개 모두 상승해야 통과."""
+		from modules.stick_executor import evaluate_pre_market
+		r = evaluate_pre_market(0.5, 0.4, 0.1, min_count=3)
+		assert r['pass'] is False  # 2/3로는 부족
 
 
 class TestShouldRetryFetch:

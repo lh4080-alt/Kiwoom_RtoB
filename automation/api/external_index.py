@@ -1,10 +1,11 @@
-"""미국 지수/선물 외부 데이터 (stick 08:30 pre-market 체크용).
+"""미국 지수/종목 외부 데이터 (stick 08:30 pre-market 체크용).
 
 yfinance를 asyncio.to_thread로 감싸서 봇의 asyncio 흐름에 통합.
 
-심볼:
-  ^SOX  필라델피아 반도체 (현물 — 08:30 KST 시점에는 어제 미국 마감 종가)
-  NQ=F  E-mini Nasdaq 100 선물 (24시간 거래 — 08:30 KST 실시간)
+기본 심볼 (SK하이닉스 등 메모리/HBM 종목 매수 신호 — 3종목 다수결):
+  ^SOX  필라델피아 반도체 (섹터 sentiment 전반)
+  NVDA  NVIDIA (HBM 수요 driver — AI 모멘텀)
+  MU    Micron (DRAM/NAND 직접 경쟁사 — 메모리 사이클 동행)
 
 반환: 등락률 % (현재가 vs 전일 종가)
 실패: None
@@ -16,7 +17,8 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 SYM_SOX = '^SOX'
-SYM_NQ = 'NQ=F'
+SYM_NVDA = 'NVDA'
+SYM_MU = 'MU'
 
 
 def _fetch_change_pct_sync(symbol: str) -> Optional[float]:
@@ -61,14 +63,15 @@ async def fetch_change_pct(symbol: str) -> Optional[float]:
 	return await asyncio.to_thread(_fetch_change_pct_sync, symbol)
 
 
-async def fetch_sox_nq() -> dict:
-	"""SOX + NQ 등락률 동시 조회. 각 실패 시 None.
+async def fetch_semi_trio() -> dict:
+	"""SOX + NVDA + MU 등락률 동시 조회. 각 실패 시 None.
 
-	Returns: {'sox': float | None, 'nq': float | None}
+	Returns: {'sox': float | None, 'nvda': float | None, 'mu': float | None}
 	"""
-	sox, nq = await asyncio.gather(
+	sox, nvda, mu = await asyncio.gather(
 		fetch_change_pct(SYM_SOX),
-		fetch_change_pct(SYM_NQ),
+		fetch_change_pct(SYM_NVDA),
+		fetch_change_pct(SYM_MU),
 		return_exceptions=False,
 	)
-	return {'sox': sox, 'nq': nq}
+	return {'sox': sox, 'nvda': nvda, 'mu': mu}
