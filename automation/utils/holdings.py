@@ -99,6 +99,29 @@ async def remove_holding(code: str) -> Optional[dict]:
 		return target
 
 
+_override_cache: dict = {'data': None, 'time': 0.0}
+
+
+def get_holding_override(code: str, cache_sec: int = 5) -> dict:
+	"""종목별 tpr/slr override 조회 (sync, 캐시 5초).
+
+	Feature 2 (websocket.py _handle_stock_quote)에서 매 0B push마다 호출되므로
+	파일 I/O를 캐시로 최소화. 같은 종목 여러 entry면 첫 entry 사용 (stick 등록은
+	한 종목당 한 번이므로 보통 유일).
+
+	Returns: {'tpr': float|None, 'slr': float|None}
+	"""
+	import time as _time
+	now = _time.time()
+	if _override_cache['data'] is None or (now - _override_cache['time']) > cache_sec:
+		_override_cache['data'] = _load_sync()
+		_override_cache['time'] = now
+	for h in _override_cache['data']:
+		if h.get('code') == code:
+			return {'tpr': h.get('tpr'), 'slr': h.get('slr')}
+	return {'tpr': None, 'slr': None}
+
+
 def calc_sell_deadline(buy_date: str, days: int = 5) -> str:
 	"""buy_date + N 영업일 (월~금 카운트, 공휴일 미고려)."""
 	dt = datetime.strptime(buy_date, '%Y-%m-%d')

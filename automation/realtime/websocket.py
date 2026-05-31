@@ -2011,11 +2011,13 @@ class UnifiedWebSocket:
 			should_sell = False
 			reason = ""
 			
-			# 기능 2: 익절/손절
+			# 기능 2: 익절/손절 — 종목별 tpr/slr override 우선 (stick), 없으면 글로벌
 			if self.feature_2_active:
-				TP_RATE = cached_setting('take_profit_rate', 10.0)
-				SL_RATE = cached_setting('stop_loss_rate', -10.0)
-				
+				from utils.holdings import get_holding_override
+				_ov = get_holding_override(stock_code)
+				TP_RATE = _ov['tpr'] if _ov['tpr'] is not None else cached_setting('take_profit_rate', 10.0)
+				SL_RATE = _ov['slr'] if _ov['slr'] is not None else cached_setting('stop_loss_rate', -10.0)
+
 				if current_profit_rate >= TP_RATE or current_profit_rate <= SL_RATE:
 					should_sell = True
 					reason = "익절" if current_profit_rate >= TP_RATE else "손절"
@@ -2053,9 +2055,12 @@ class UnifiedWebSocket:
 				if self.feature_5_active:
 					print(f"  트레일링 하락률 계산: (({high_price:,.0f} - {current_price:,.0f}) / {high_price:,.0f}) * 100 = {drop_rate:.2f}%")
 				if self.feature_2_active:
-					TP_RATE = cached_setting('take_profit_rate', 10.0)
-					SL_RATE = cached_setting('stop_loss_rate', -10.0)
-					print(f"  익절 기준: {TP_RATE}%, 손절 기준: {SL_RATE}%")
+					from utils.holdings import get_holding_override
+					_ov = get_holding_override(stock_code)
+					TP_RATE = _ov['tpr'] if _ov['tpr'] is not None else cached_setting('take_profit_rate', 10.0)
+					SL_RATE = _ov['slr'] if _ov['slr'] is not None else cached_setting('stop_loss_rate', -10.0)
+					ov_tag = " (stick override)" if (_ov['tpr'] is not None or _ov['slr'] is not None) else ""
+					print(f"  익절 기준: {TP_RATE}%, 손절 기준: {SL_RATE}%{ov_tag}")
 				if self.feature_5_active:
 					TRAILING_STOP_RATE = cached_setting('trailing_stop_rate', 3.0)
 					print(f"  트레일링 스탑 기준: {TRAILING_STOP_RATE}%")
