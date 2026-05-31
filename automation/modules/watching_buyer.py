@@ -225,10 +225,11 @@ class WatchingBuyer:
 			logger.info(f"[watching_buyer] {code} halt 상태 — 매수 스킵")
 			return
 
-		# 2. 보유 중복 (pending_fill / filled)
+		# 2. 보유 중복 (pending_fill / filled) — stick은 우회 (매일 누적 매수)
+		source = entry.get('source', 'pick')
 		holdings = await load_holdings()
 		held_codes = {h['code'] for h in holdings if h.get('status') in ('pending_fill', 'filled')}
-		if code in held_codes:
+		if code in held_codes and source != 'stick':
 			logger.warning(f"[watching_buyer] {code} 이미 보유 중 — watching 제거")
 			await remove_from_watching(code)
 			await tel_send(f"⏸️ {code} watching 매수 직전 이미 보유 중 — 감시 종료")
@@ -303,7 +304,7 @@ class WatchingBuyer:
 			return
 
 		# 매수 성공 — holdings 추가 + watching 제거 + 0B 등록 + 알림
-		await add_holding({
+		holding_entry = {
 			'code': code,
 			'buy_price': limit_price,
 			'buy_qty': qty,
@@ -313,7 +314,13 @@ class WatchingBuyer:
 			'stop_loss_price': int(limit_price * (1 + STOP_LOSS_PCT)),
 			'sell_deadline': calc_sell_deadline(today),
 			'status': 'pending_fill',
-		})
+			'source': source,
+		}
+		if entry.get('tpr') is not None:
+			holding_entry['tpr'] = float(entry['tpr'])
+		if entry.get('slr') is not None:
+			holding_entry['slr'] = float(entry['slr'])
+		await add_holding(holding_entry)
 		await remove_from_watching(code)
 		try:
 			ws = getattr(self.bot, 'websocket', None)

@@ -157,7 +157,11 @@ class BuyExecutor:
 		approved_map = {item['code']: item.get('approved_at') for item in queue[:MAX_BUYS_PER_DAY]}
 		# 종목별 매수 수량 (pick <코드> <수량>)
 		qty_map = {item['code']: int(item.get('qty', 1) or 1) for item in queue[:MAX_BUYS_PER_DAY]}
-		logger.info(f"[buy_executor] 매수 대상 {len(codes_to_buy)}건: {codes_to_buy} (qty={qty_map})")
+		# 종목별 source (pick/stick) — stick은 held 필터 우회 + tpr/slr override
+		source_map = {item['code']: item.get('source', 'pick') for item in queue[:MAX_BUYS_PER_DAY]}
+		tpr_map = {item['code']: item.get('tpr') for item in queue[:MAX_BUYS_PER_DAY]}
+		slr_map = {item['code']: item.get('slr') for item in queue[:MAX_BUYS_PER_DAY]}
+		logger.info(f"[buy_executor] 매수 대상 {len(codes_to_buy)}건: {codes_to_buy} (qty={qty_map}, src={source_map})")
 
 		token = await self.bot.token_manager.get_token()
 		if not token:
@@ -165,7 +169,8 @@ class BuyExecutor:
 			return
 
 		results = await asyncio.gather(
-			*[self._buy_one(code, token, qty_map.get(code, 1)) for code in codes_to_buy],
+			*[self._buy_one(code, token, qty_map.get(code, 1),
+			                source_map.get(code, 'pick')) for code in codes_to_buy],
 			return_exceptions=True,
 		)
 
@@ -178,7 +183,7 @@ class BuyExecutor:
 			status = result.get('status')
 			if status == 'ordered':
 				success.append(result)
-				await add_holding({
+				holding_entry = {
 					'code': code,
 					'buy_price': result['price'],
 					'buy_qty': qty_map.get(code, 1),
@@ -188,7 +193,14 @@ class BuyExecutor:
 					'stop_loss_price': int(result['price'] * (1 + STOP_LOSS_PCT)),
 					'sell_deadline': calc_sell_deadline(today),
 					'status': 'pending_fill',
-				})
+					'source': source_map.get(code, 'pick'),
+				}
+				# stick 전용 tpr/slr override (Feature 2가 우선 적용)
+				if tpr_map.get(code) is not None:
+					holding_entry['tpr'] = float(tpr_map[code])
+				if slr_map.get(code) is not None:
+					holding_entry['slr'] = float(slr_map[code])
+				await add_holding(holding_entry)
 			elif status and status.startswith('blocked'):
 				blocked.append((code, status, result))
 				# 차단 종목 폐기 안 함 — watching 큐로 이동, 장중 5분 polling으로 정상 진입 감시
@@ -197,15 +209,21 @@ class BuyExecutor:
 					prev_close = result.get('prev')
 					open_or_cur = result.get('open')
 					ratio = (open_or_cur / prev_close) if (prev_close and open_or_cur) else None
-					await add_to_watching({
+					watching_entry = {
 						'code': code,
 						'approved_at': approved_map.get(code),
 						'qty': qty_map.get(code, 1),
+						'source': source_map.get(code, 'pick'),
 						'blocked_at': datetime.now().isoformat(timespec='seconds'),
 						'block_reason': status,
 						'block_ratio': ratio,
 						'prev_close': prev_close,
-					})
+					}
+					if tpr_map.get(code) is not None:
+						watching_entry['tpr'] = float(tpr_map[code])
+					if slr_map.get(code) is not None:
+						watching_entry['slr'] = float(slr_map[code])
+					await add_to_watching(watching_entry)
 					logger.info(f"[buy_executor] {code} watching 추가 ({status}, ratio={ratio})")
 				except Exception:
 					logger.exception(f"[buy_executor] {code} watching 추가 실패")
@@ -255,7 +273,7 @@ class BuyExecutor:
 		asyncio.create_task(self._cancel_unfilled_at_0930())
 		asyncio.create_task(self._verify_holdings_against_account_at_0935())
 
-	async def _buy_one(self, code: str, token: str, qty: int = 1) -> dict:
+	async def _buy_one(self, code: str, token: str, qty: int = 1, source: str = 'pick') -> dict:
 		"""단일 종목 매수.
 
 		원본 키움 봇 chk_n_buy 패턴 + 우리 보강(갭/halt/pnl) 통합:
@@ -265,6 +283,9 @@ class BuyExecutor:
 		     - 시초가 미반영(cur_prc=0)이어도 base_pric만 있으면 갭 검증 가능
 		  3) 갭상승/하락 차단 (우리 보강 유지)
 		  4) fn_kt10000으로 매수 (ord_uv=bid)
+
+		source='stick'은 "이미 보유 중" 필터를 우회 (매일 누적 매수 의도).
+		나머지 필터(미체결/쿨다운/자동매매금지/갭)는 그대로 적용.
 
 		Returns dict with keys: code, status, price, ord_no, open, prev.
 		"""
@@ -283,16 +304,17 @@ class BuyExecutor:
 			if is_blocked(code):
 				return {'code': code, 'status': 'failed_blacklist'}
 
-			# ── 안전망 2: 이미 보유 중인지
-			try:
-				my_stocks = await get_my_stocks(print_df=False, token=token)
-				if isinstance(my_stocks, list):
-					for stock in my_stocks:
-						if normalize_stock_code(stock.get('stk_cd', '')) == code:
-							return {'code': code, 'status': 'failed_already_held'}
-			except Exception:
-				logger.exception(f"[_buy_one] {code} 보유 조회 실패 (매수 중단)")
-				return {'code': code, 'status': 'failed_my_stocks_query'}
+			# ── 안전망 2: 이미 보유 중인지 (stick은 우회 — 매일 누적 매수)
+			if source != 'stick':
+				try:
+					my_stocks = await get_my_stocks(print_df=False, token=token)
+					if isinstance(my_stocks, list):
+						for stock in my_stocks:
+							if normalize_stock_code(stock.get('stk_cd', '')) == code:
+								return {'code': code, 'status': 'failed_already_held'}
+				except Exception:
+					logger.exception(f"[_buy_one] {code} 보유 조회 실패 (매수 중단)")
+					return {'code': code, 'status': 'failed_my_stocks_query'}
 
 			# ── 안전망 3: 미체결 (같은 종목 중복 주문 방지)
 			try:
