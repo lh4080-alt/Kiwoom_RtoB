@@ -111,6 +111,10 @@ class ChatCommand:
 		# 차단 종목 재진입 감시 매수 (09:05~14:30 5분 polling)
 		from modules.watching_buyer import WatchingBuyer
 		self.watching_buyer = WatchingBuyer(bot_ref=self)
+
+		# stick — 매일 08:30 SOX/NQ 체크 후 자동 매수 + 15:20 동시호가 매도
+		from modules.stick_executor import StickExecutor
+		self.stick_executor = StickExecutor(bot_ref=self)
 	
 	async def _reconnect_with_retry(self, was_feature_1_active: bool):
 		"""연결 끊김 이후 토큰 발급/웹소켓 재연결을 재시도합니다."""

@@ -316,6 +316,8 @@ class MainApp:
 			self.chat_command.holdings_manager.start()
 			# 차단 종목 재진입 감시 매수 (09:05~14:30 5분 polling)
 			self.chat_command.watching_buyer.start()
+			# stick 매일 매수 + 동시호가 매도
+			self.chat_command.stick_executor.start()
 			# 봇 재시작 시 pnl_tracker realized_today 자정 후 리셋
 			from utils.pnl_tracker import reset_daily_if_new_day
 			await reset_daily_if_new_day()
