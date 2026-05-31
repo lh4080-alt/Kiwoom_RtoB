@@ -709,6 +709,125 @@ class ChatCommand:
 		await tel_send(f"🗑️ [감시 취소] {c} 제거 — 감시 큐 {len(entries)}건")
 		return True
 
+	async def _cmd_stick(self, args: list) -> bool:
+		"""stick 종목 영구 등록 — 매일 08:30 SOX/NQ 조건 충족 시 자동 매수.
+
+		사용법: stick <종목코드> [수량] [tpr <n>] [slr <n>]
+		  예: stick 122630         → 1주, 글로벌 tpr/slr 사용
+		      stick 122630 5       → 5주
+		      stick 122630 5 tpr 3 → 5주, 익절 +3% (slr는 글로벌)
+		      stick 122630 5 tpr 3 slr 2 → 5주, +3% 익절 / -2% 손절
+		"""
+		from utils.collection_pool import get_stock_name
+		from utils.stick_list import add_stick, load_stick
+
+		if not args:
+			await tel_send(
+				"❌ 사용법: stick <종목코드> [수량] [tpr <n>] [slr <n>]\n"
+				"예: stick 122630 5 tpr 3 slr 2"
+			)
+			return False
+
+		code = str(args[0]).strip()
+		if not code.isdigit() or len(code) != 6:
+			await tel_send(f"❌ 종목코드는 6자리 숫자여야 합니다. (입력: {code})")
+			return False
+
+		# args[1:] 파싱 — 키워드 tpr/slr 추출, 나머지 첫 숫자는 수량
+		qty = 1
+		tpr = None
+		slr = None
+		i = 1
+		while i < len(args):
+			tok = str(args[i]).strip().lower()
+			if tok == 'tpr' and i + 1 < len(args):
+				try:
+					tpr = float(args[i + 1])
+					if tpr <= 0:
+						await tel_send("❌ tpr은 1 이상이어야 합니다.")
+						return False
+				except (ValueError, TypeError):
+					await tel_send(f"❌ tpr 값은 숫자여야 합니다. (입력: {args[i + 1]})")
+					return False
+				i += 2
+			elif tok == 'slr' and i + 1 < len(args):
+				try:
+					slr = float(args[i + 1])
+					if slr <= 0:
+						await tel_send("❌ slr은 1 이상이어야 합니다 (양수 입력, 내부에서 음수 변환).")
+						return False
+				except (ValueError, TypeError):
+					await tel_send(f"❌ slr 값은 숫자여야 합니다. (입력: {args[i + 1]})")
+					return False
+				i += 2
+			elif tok.isdigit() and qty == 1:
+				# 첫 번째 평순 숫자 = 수량
+				qty = int(tok)
+				if qty <= 0:
+					await tel_send("❌ 수량은 1 이상이어야 합니다.")
+					return False
+				i += 1
+			else:
+				await tel_send(f"❌ 알 수 없는 인자: {args[i]}")
+				return False
+
+		name = await get_stock_name(code)
+		label = f"{code} {name}" if name else code
+
+		if not await add_stick(code, qty=qty, tpr=tpr, slr=slr):
+			items = await load_stick()
+			await tel_send(
+				f"♻️ {label} 이미 stick 등록됨 — 변경하려면 stick_cancel 후 재등록\n"
+				f"📋 stick 총 {len(items)}건"
+			)
+			return False
+
+		items = await load_stick()
+		tpr_str = f"+{tpr}%" if tpr is not None else "글로벌"
+		slr_str = f"-{slr}%" if slr is not None else "글로벌"
+		await tel_send(
+			f"✅ [stick 등록] {label} {qty}주\n"
+			f"   익절: {tpr_str} / 손절: {slr_str}\n"
+			f"📋 stick 총 {len(items)}건 — 매일 08:30 SOX/NQ 체크 후 자동 매수"
+		)
+		return True
+
+	async def _cmd_stick_cancel(self, code: str) -> bool:
+		"""stick 등록 취소."""
+		from utils.stick_list import remove_stick, load_stick
+		c = str(code).strip()
+		ok = await remove_stick(c)
+		items = await load_stick()
+		if not ok:
+			await tel_send(f"❌ [stick 취소 실패] {c} 는 stick에 없음 (현재 {len(items)}건)")
+			return False
+		await tel_send(f"🗑️ [stick 취소] {c} 제거 — stick 총 {len(items)}건")
+		return True
+
+	async def _cmd_stick_list(self) -> bool:
+		"""stick 등록 종목 + tpr/slr 출력."""
+		from utils.collection_pool import get_stock_name
+		from utils.stick_list import load_stick
+
+		items = await load_stick()
+		if not items:
+			await tel_send("📋 [stick 등록 종목] 없음")
+			return True
+
+		lines = [f"📋 [stick 등록 종목] {len(items)}건"]
+		for it in items:
+			code = it.get('code', '-')
+			qty = it.get('qty', 1)
+			name = await get_stock_name(code)
+			label = f"{code} {name}" if name else code
+			tpr = it.get('tpr')
+			slr = it.get('slr')
+			tpr_str = f"+{tpr}%" if tpr is not None else "글로벌"
+			slr_str = f"{slr}%" if slr is not None else "글로벌"
+			lines.append(f"- {label} {qty}주 / 익절 {tpr_str} / 손절 {slr_str}")
+		await tel_send("\n".join(lines))
+		return True
+
 	async def _cmd_status(self) -> bool:
 		"""봇 상태 출력 — 매수 대기열, halt 여부 등."""
 		from utils.collection_pool import get_stock_name, get_pool
@@ -806,6 +925,18 @@ class ChatCommand:
 			else:
 				await tel_send("❌ 사용법: watching_cancel <종목코드>")
 				return False
+		elif command == 'stick_list':
+			return await self._cmd_stick_list()
+		elif command.startswith('stick_cancel '):
+			parts = command.split()
+			if len(parts) == 2:
+				return await self._cmd_stick_cancel(parts[1])
+			else:
+				await tel_send("❌ 사용법: stick_cancel <종목코드>")
+				return False
+		elif command.startswith('stick '):
+			parts = text.strip().split()[1:]
+			return await self._cmd_stick(parts)
 
 		if command == 'start':
 			return await self.start(is_paper_trading=True, feature_numbers=None)

@@ -55,18 +55,29 @@ async def save_queue(queue: list) -> None:
 		_save_sync(queue)
 
 
-async def add_to_queue(code: str, approved_by: str = 'telegram', qty: int = 1) -> bool:
-	"""종목 추가. 중복이면 False."""
+async def add_to_queue(code: str, approved_by: str = 'telegram', qty: int = 1,
+                       source: str = 'pick', tpr=None, slr=None) -> bool:
+	"""종목 추가. 중복이면 False.
+
+	source: 'pick' (수동 + 글로벌 tpr/slr) / 'stick' (자동 + per-holding tpr/slr override)
+	tpr/slr: stick 전용 override (None이면 글로벌 fallback).
+	"""
 	async with _lock:
 		queue = _load_sync()
 		if any(item.get('code') == code for item in queue):
 			return False
-		queue.append({
+		entry = {
 			'code': code,
 			'qty': int(qty) if qty and int(qty) >= 1 else 1,
+			'source': source,
 			'approved_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
 			'approved_by': approved_by,
-		})
+		}
+		if tpr is not None:
+			entry['tpr'] = float(tpr)
+		if slr is not None:
+			entry['slr'] = float(slr)
+		queue.append(entry)
 		_save_sync(queue)
 		return True
 
