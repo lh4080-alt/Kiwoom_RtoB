@@ -89,6 +89,20 @@ def filter_stick_today(holdings: list, today_iso: str) -> list:
 	]
 
 
+def filter_stick_leftover(holdings: list, today_iso: str) -> list:
+	"""봇 시작 시 stick 잔여 검사 — source=stick AND status=filled AND buy_date < today.
+
+	어제(이전) 15:20/15:25 동시호가 매도 실패 또는 봇 다운으로 못 판 stick.
+	Lee 수동 처리 알림 대상.
+	"""
+	return [
+		h for h in holdings
+		if h.get('source') == 'stick'
+		and h.get('status') == 'filled'
+		and h.get('buy_date', '') < today_iso
+	]
+
+
 class StickExecutor:
 	"""stick 매일 매수 + 동시호가 매도."""
 
@@ -104,7 +118,34 @@ class StickExecutor:
 	def start(self):
 		if self._task is None or self._task.done():
 			self._task = asyncio.create_task(self._scheduler_loop())
+			# 봇 시작 시 stick 잔여 1회 검사 (어제 못 판 종목 알림)
+			asyncio.create_task(self._check_leftover_on_startup())
 			logger.info("StickExecutor started")
+
+	async def _check_leftover_on_startup(self):
+		"""봇 startup 시 1회 — 어제 stick 잔여 종목 텔레그램 알림."""
+		from telegram.tel_send import tel_send
+		from utils.holdings import load_holdings
+		try:
+			# 다른 init 완료를 잠시 대기 (텔레그램/토큰 준비)
+			await asyncio.sleep(3)
+			holdings = await load_holdings()
+			today_iso = date.today().isoformat()
+			leftover = filter_stick_leftover(holdings, today_iso)
+			if not leftover:
+				return
+			lines = [f"⚠️ [stick 잔여 종목] {len(leftover)}건 — Lee 수동 처리 필요"]
+			for h in leftover:
+				code = h.get('code', '-')
+				qty = h.get('buy_qty', '-')
+				buy_date = h.get('buy_date', '-')
+				buy_price = h.get('buy_price', 0)
+				lines.append(f"- {code} {qty}주 (매수 {buy_date} @ {buy_price:,}원)")
+			lines.append("어제 동시호가 매도 실패 또는 봇 다운으로 추정. 매도/유지 판단 필요.")
+			await tel_send("\n".join(lines))
+			logger.warning(f"[stick] 잔여 {len(leftover)}건 — {[h.get('code') for h in leftover]}")
+		except Exception:
+			logger.exception("[stick] 잔여 검사 실패")
 
 	def stop(self):
 		if self._task and not self._task.done():

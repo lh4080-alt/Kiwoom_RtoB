@@ -131,3 +131,46 @@ class TestFilterStickToday:
 		result = filter_stick_today(h, '2026-05-30')
 		assert len(result) == 1
 		assert result[0]['code'] == '122630'
+
+
+class TestFilterStickLeftover:
+
+	def test_no_leftover(self):
+		from modules.stick_executor import filter_stick_leftover
+		h = [{'code': '122630', 'source': 'stick', 'buy_date': '2026-05-30', 'status': 'filled'}]
+		assert filter_stick_leftover(h, '2026-05-30') == []
+
+	def test_yesterday_stick_leftover(self):
+		"""어제 stick 매도 실패 잔여 — 알림 대상."""
+		from modules.stick_executor import filter_stick_leftover
+		h = [{'code': '122630', 'source': 'stick', 'buy_date': '2026-05-29', 'status': 'filled'}]
+		assert len(filter_stick_leftover(h, '2026-05-30')) == 1
+
+	def test_pick_yesterday_excluded(self):
+		"""pick 종목은 잔여 알림 대상 아님 (계속 보유)."""
+		from modules.stick_executor import filter_stick_leftover
+		h = [{'code': '005930', 'source': 'pick', 'buy_date': '2026-05-29', 'status': 'filled'}]
+		assert filter_stick_leftover(h, '2026-05-30') == []
+
+	def test_today_stick_excluded(self):
+		"""오늘 산 stick은 잔여 아님 (오늘 동시호가 매도 예정)."""
+		from modules.stick_executor import filter_stick_leftover
+		h = [{'code': '122630', 'source': 'stick', 'buy_date': '2026-05-30', 'status': 'filled'}]
+		assert filter_stick_leftover(h, '2026-05-30') == []
+
+	def test_pending_fill_excluded(self):
+		from modules.stick_executor import filter_stick_leftover
+		h = [{'code': '122630', 'source': 'stick', 'buy_date': '2026-05-29', 'status': 'pending_fill'}]
+		assert filter_stick_leftover(h, '2026-05-30') == []
+
+	def test_multi_day_leftover(self):
+		"""여러 날 누적된 잔여 — 모두 포함."""
+		from modules.stick_executor import filter_stick_leftover
+		h = [
+			{'code': '122630', 'source': 'stick', 'buy_date': '2026-05-27', 'status': 'filled'},
+			{'code': '233740', 'source': 'stick', 'buy_date': '2026-05-29', 'status': 'filled'},
+			{'code': '005930', 'source': 'pick', 'buy_date': '2026-05-25', 'status': 'filled'},
+		]
+		result = filter_stick_leftover(h, '2026-05-30')
+		assert len(result) == 2
+		assert {r['code'] for r in result} == {'122630', '233740'}
