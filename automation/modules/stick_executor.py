@@ -75,6 +75,20 @@ def should_retry_fetch(attempts: int, last_attempt_at, now: datetime,
 	return elapsed >= gap_sec
 
 
+def filter_stick_today(holdings: list, today_iso: str) -> list:
+	"""동시호가 매도 대상 필터 — source=stick AND buy_date=today AND status=filled.
+
+	pending_fill 제외 (09:30 buy_executor가 미체결 자동 취소).
+	어제 stick 잔여(buy_date != today)는 Phase 6 잔여 알림에서 처리.
+	"""
+	return [
+		h for h in holdings
+		if h.get('source') == 'stick'
+		and h.get('buy_date') == today_iso
+		and h.get('status') == 'filled'
+	]
+
+
 class StickExecutor:
 	"""stick 매일 매수 + 동시호가 매도."""
 
@@ -231,12 +245,7 @@ class StickExecutor:
 
 		holdings = await load_holdings()
 		today_iso = date.today().isoformat()
-		stick_today = [
-			h for h in holdings
-			if h.get('source') == 'stick'
-			and h.get('buy_date') == today_iso
-			and h.get('status') == 'filled'
-		]
+		stick_today = filter_stick_today(holdings, today_iso)
 
 		if not stick_today:
 			if not retry:

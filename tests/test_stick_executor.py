@@ -82,3 +82,52 @@ class TestShouldRetryFetch:
 		now = datetime(2026, 5, 30, 8, 30, 0)
 		assert should_retry_fetch(5, None, now, max_retries=10) is True
 		assert should_retry_fetch(10, None, now, max_retries=10) is False
+
+
+class TestFilterStickToday:
+
+	def test_empty_holdings(self):
+		from modules.stick_executor import filter_stick_today
+		assert filter_stick_today([], '2026-05-30') == []
+
+	def test_stick_filled_today_included(self):
+		from modules.stick_executor import filter_stick_today
+		h = [{'code': '122630', 'source': 'stick', 'buy_date': '2026-05-30', 'status': 'filled'}]
+		assert filter_stick_today(h, '2026-05-30') == h
+
+	def test_pick_excluded(self):
+		"""pick 종목은 동시호가 매도 대상 아님."""
+		from modules.stick_executor import filter_stick_today
+		h = [{'code': '005930', 'source': 'pick', 'buy_date': '2026-05-30', 'status': 'filled'}]
+		assert filter_stick_today(h, '2026-05-30') == []
+
+	def test_yesterday_stick_excluded(self):
+		"""어제 산 stick 잔여 — Phase 6에서 알림, 동시호가 매도 X."""
+		from modules.stick_executor import filter_stick_today
+		h = [{'code': '122630', 'source': 'stick', 'buy_date': '2026-05-29', 'status': 'filled'}]
+		assert filter_stick_today(h, '2026-05-30') == []
+
+	def test_pending_fill_excluded(self):
+		"""미체결 상태는 09:30 buy_executor가 자동 취소 — 동시호가 매도 X."""
+		from modules.stick_executor import filter_stick_today
+		h = [{'code': '122630', 'source': 'stick', 'buy_date': '2026-05-30', 'status': 'pending_fill'}]
+		assert filter_stick_today(h, '2026-05-30') == []
+
+	def test_no_source_excluded(self):
+		"""source 없는 옛 holdings 잔재 — 동시호가 매도 X."""
+		from modules.stick_executor import filter_stick_today
+		h = [{'code': '005930', 'buy_date': '2026-05-30', 'status': 'filled'}]
+		assert filter_stick_today(h, '2026-05-30') == []
+
+	def test_mixed_pick_and_stick(self):
+		"""pick + stick 혼재 — stick today filled만 추출."""
+		from modules.stick_executor import filter_stick_today
+		h = [
+			{'code': '005930', 'source': 'pick', 'buy_date': '2026-05-30', 'status': 'filled'},
+			{'code': '122630', 'source': 'stick', 'buy_date': '2026-05-30', 'status': 'filled'},
+			{'code': '233740', 'source': 'stick', 'buy_date': '2026-05-29', 'status': 'filled'},
+			{'code': '396500', 'source': 'stick', 'buy_date': '2026-05-30', 'status': 'pending_fill'},
+		]
+		result = filter_stick_today(h, '2026-05-30')
+		assert len(result) == 1
+		assert result[0]['code'] == '122630'
