@@ -12,24 +12,34 @@ USER_GUIDE_MESSAGE = "프로그램 사용법 자세히 보기\nhttps://yalco.not
 # Phase 2 신규 명령 안내 (조건검색 수집 → 16:00 분석 → Lee 검토 → 다음날 09:00 매수 흐름용)
 PHASE2_COMMANDS = """🆕 [Phase 2 명령]
 
-• pick <code1> [code2] ... — 매수 후보 추가 (6자리)
-  예: pick 005930 000660
+📌 pick — 다음날 1회 매수 후보
+• pick <code> [수량]
+  예: pick 005930 → 1주
+      pick 005930 5 → 5주
+• cancel <code> — pick 취소
 
-• cancel <code> — 매수 후보 취소
-  예: cancel 005930
+📌 stick — 매일 반복 매수 (08:30 미국 신호 통과 시)
+• stick <code> [수량] [tpr <n>] [slr <n>]
+  예: stick 000660 1 → 1주, 글로벌 익/손절
+      stick 000660 1 tpr 5 slr 3 → +5% 익절 / -3% 손절
+  ※ tpr/slr 생략 시 글로벌 (기능 2) 값 사용
+  ※ 양수로 입력 (slr는 내부에서 음수 변환)
+• stick_list — 등록 종목 + tpr/slr 확인
+• stick_cancel <code> — 해제
 
-• status — 봇 상태 (매수 대기열 / halt 여부 / 수집풀)
+📌 운영
+• status — 매수 대기열 / halt / 수집풀
+• halt / resume — 매수 정지 / 재개
+• holdings_clean <code> — holdings 잔재 청소
+• force_daily — [DEBUG] 16:00 분석 즉시 실행
 
-• halt — 매수 전면 정지 (수동 명령으로만 해제)
-• resume — 매수 재개
-
-• force_daily — [DEBUG] 16:00 분석 즉시 실행 (검증용)
-
-매수 흐름:
+📊 매수 흐름
 1) 장중 09:00~15:30: 조건검색 매칭 → 수집풀 누적
-2) 16:00 daily_analyzer: 분석 결과 텔레그램 알림 + 풀 비우기
-3) Lee 검토 후 pick 명령으로 매수 후보 확정
-4) 다음날 09:00 buy_executor 자동 매수 (Step C 이후)"""
+2) 16:00 daily_analyzer: 분석 + 알림
+3) Lee 검토 후 pick / stick 등록
+4) 08:30 stick 신호 체크 (SOX + NVDA + MU 중 2/3 ≥ +0.3%)
+5) 09:00 buy_executor 자동 매수
+6) 15:20 stick 종목 동시호가 매도 (당일 청산)"""
 
 async def send_user_guide():
 	"""프로그램 사용법 링크 + Phase 2 명령 안내 전송."""
