@@ -66,15 +66,16 @@ def fmt_z_history(z_list: list) -> str:
 
 def build_z_histories(stock_code: str, eval_date: str,
                       db_path: Optional[str] = None) -> dict:
-	"""각 축에 대해 4일치 z history 계산.
+	"""각 축에 대해 4일치 z history 계산. eval_date를 "오늘"로.
 
-	Returns: {axis: [z_d-3, z_d-2, z_d-1, z_d]}
+	Returns: {axis: [z_d-3, z_d-2, z_d-1, z_eval_date]}
 	"""
 	from . import db as st_db
-	# 최근 30일 fetch (4일치 + baseline 20일 + 여유)
+	# 최근 30일 fetch (eval_date 포함 4일 + baseline 20일 + 여유)
 	rows = st_db.fetch_recent_factors(stock_code, n=30, db_path=db_path)
-	# DESC 정렬 (가장 최근 [0])
+	# DESC 정렬 후 eval_date 이전(포함)만 — eval_date 이후의 stale row 제외
 	rows = sorted(rows, key=lambda r: r.get('date', ''), reverse=True)
+	rows = [r for r in rows if r.get('date', '') <= eval_date]
 	dates_desc = [r['date'] for r in rows]
 
 	z_hist = {}
