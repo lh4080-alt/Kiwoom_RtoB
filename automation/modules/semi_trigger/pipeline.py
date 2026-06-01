@@ -38,16 +38,20 @@ _BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.p
 _JSON_PATH = os.path.join(_BASE_DIR, 'config', 'data', 'daily_semi_trigger.json')
 
 
-# 축 → DB 컬럼 매핑 (Lee 6/2: etf_flow → 종목별 4 sub-signal)
+# 축 → DB 컬럼 매핑 (Lee 6/2 최종: 4 점수축 + 정보표시축)
+# 점수 기여: us_memory, legacy_sox_nvda, fx, nasdaq_futures
+# 정보 표시 (점수 X): price_change, volume_amount, volume_ratio, program_net, foreign_flow
 AXIS_TO_DB_COL = {
-	'us_memory':       'us_memory',
-	'price_change':    'price_change',
-	'volume_amount':   'volume_amount',
-	'volume_ratio':    'volume_ratio',
-	'program_net':     'program_net',
-	'fx':              'fx_change',
-	'foreign_flow':    'foreign_flow_5d',
-	'nasdaq_futures':  'nasdaq_futures',
+	'us_memory':        'us_memory',
+	'legacy_sox_nvda':  'sox_nvda_avg',
+	'fx':               'fx_change',
+	'nasdaq_futures':   'nasdaq_futures',
+	# 정보 표시용 (z 계산은 함, 점수 기여 X)
+	'price_change':     'price_change',
+	'volume_amount':    'volume_amount',
+	'volume_ratio':     'volume_ratio',
+	'program_net':      'program_net',
+	'foreign_flow':     'foreign_flow_5d',
 }
 
 
@@ -67,16 +71,17 @@ def calc_axes_zscores(eval_date: str, stock_code: str, raw_factors: dict,
 	baseline_rows = [r for r in recent if r.get('date') != eval_date]
 	baseline_days = len(baseline_rows)
 
-	# raw_factors 키 매핑 (8축)
+	# raw_factors 키 매핑 (점수 4축 + 정보 표시축)
 	current_map = {
-		'us_memory':       raw_factors.get('us_memory'),
-		'price_change':    raw_factors.get('price_change'),
-		'volume_amount':   raw_factors.get('volume_amount'),
-		'volume_ratio':    raw_factors.get('volume_ratio'),
-		'program_net':     raw_factors.get('program_net'),
-		'fx':              raw_factors.get('fx_change'),
-		'foreign_flow':    raw_factors.get('foreign_flow_5d'),
-		'nasdaq_futures':  raw_factors.get('nasdaq_futures'),
+		'us_memory':        raw_factors.get('us_memory'),
+		'legacy_sox_nvda':  raw_factors.get('sox_nvda_avg'),
+		'fx':               raw_factors.get('fx_change'),
+		'nasdaq_futures':   raw_factors.get('nasdaq_futures'),
+		'price_change':     raw_factors.get('price_change'),
+		'volume_amount':    raw_factors.get('volume_amount'),
+		'volume_ratio':     raw_factors.get('volume_ratio'),
+		'program_net':      raw_factors.get('program_net'),
+		'foreign_flow':     raw_factors.get('foreign_flow_5d'),
 	}
 
 	z_values = {}
@@ -170,6 +175,11 @@ async def run_pipeline_morning(eval_date: str, token: str, mode: str = 'shadow',
 	for stock_code in TARGET_UNDERLYINGS:
 		# morning이 update 하는 키만 raw_factors에 포함 — etf/foreign은 evening 저장값 유지
 		# (db.upsert_factors가 부분 upsert로 빠진 키의 기존 값 자동 보존)
+		# SOX/NVDA 평균 (legacy_sox_nvda 축)
+		sox_nvda_avg = None
+		if sox is not None and nvda is not None:
+			sox_nvda_avg = (sox + nvda) / 2.0
+
 		raw_factors = {
 			'us_memory':       us_mem.get('us_memory'),
 			'fx_change':       fx_r.get('fx_change'),
@@ -177,6 +187,7 @@ async def run_pipeline_morning(eval_date: str, token: str, mode: str = 'shadow',
 			'sox':             sox,
 			'nvda':            nvda,
 			'mu':              mu,
+			'sox_nvda_avg':    sox_nvda_avg,
 		}
 		# DB 업데이트 (08:30 최신값으로 us_mem/fx/nq 덮어쓰기)
 		st_db.upsert_factors(eval_date, stock_code, raw_factors, db_path=db_path)

@@ -14,17 +14,15 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# 가중치 (Lee 6/2 추가 수정: etf_flow 20% → 종목별 4 sub-signal 각 5%)
+# 가중치 (Lee 6/2 최종 수정: 4축 — us_mem 50% + legacy 30% + fx 10% + nq 10%)
 WEIGHTS = {
-	'us_memory':       0.40,
-	'price_change':    0.05,  # 종목 주가 등락률
-	'volume_amount':   0.05,  # 종목 거래대금
-	'volume_ratio':    0.05,  # 거래량 / 직전5일평균 × 100
-	'program_net':     0.05,  # 프로그램 순매수 (원)
-	'fx':              0.20,
-	'foreign_flow':    0.10,
-	'nasdaq_futures':  0.10,
+	'us_memory':        0.50,  # MU/WDC/SNDK/STX 평균
+	'legacy_sox_nvda':  0.30,  # SOX + NVDA 평균 (신규 축)
+	'fx':               0.10,
+	'nasdaq_futures':   0.10,
 }
+# 종목별 4신호 (price_change/volume_amount/volume_ratio/program_net)와
+# foreign_flow는 점수 기여 X, 정보 표시만.
 
 # baseline 최소 요구일수
 BASELINE_MIN_DAYS = 20

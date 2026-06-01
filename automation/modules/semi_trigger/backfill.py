@@ -312,14 +312,22 @@ async def backfill_factors(end_dt: str, token: str,
 						]
 					break
 
+			# SOX/NVDA 평균 (legacy_sox_nvda 축)
+			sox_v = sox_by_date.get(d_iso)
+			nvda_v = nvda_by_date.get(d_iso)
+			sox_nvda_avg_v = ((sox_v + nvda_v) / 2.0
+			                  if sox_v is not None and nvda_v is not None
+			                  else None)
+
 			factors = {
 				'us_memory':       us_memory_by_date.get(d_iso),
 				'fx_change':       fx_by_date.get(d_iso),
 				'foreign_flow_5d': ff_map.get(d_yyyymmdd),
 				'nasdaq_futures':  nq_by_date.get(d_iso),
-				'sox':             sox_by_date.get(d_iso),
-				'nvda':            nvda_by_date.get(d_iso),
+				'sox':             sox_v,
+				'nvda':            nvda_v,
 				'mu':              yf_history.get(SYM_MU, {}).get(d_iso),
+				'sox_nvda_avg':    sox_nvda_avg_v,
 				# 종목별 4 sub-signal
 				'price_change':    calc_price_change(cur_candle.get('close', 0), prev_close_v),
 				'volume_amount':   (int(cur_candle.get('trade_amount', 0)) * MILLION) if cur_candle.get('trade_amount') else None,

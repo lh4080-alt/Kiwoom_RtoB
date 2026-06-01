@@ -52,22 +52,21 @@ class TestMemoryPriceMissingFallback:
 	"""⑤ nasdaq_futures 결측 시 scoring 가중 재분배 (Lee 6/2: memory_price → NQ 교체)."""
 
 	def test_semi_score_with_nq_none(self):
-		"""4축만 유효 → 정상 점수 산출."""
+		"""4축 시스템 — nasdaq_futures 결측 → 3축 가중 재분배."""
 		from modules.semi_trigger.scoring import calc_semi_score
 		r = calc_semi_score({
-			'us_memory':       2.0,
-			'etf_flow':        1.5,
-			'fx':              0.5,
-			'foreign_flow':    1.0,
-			'nasdaq_futures':  None,
+			'us_memory':        2.0,
+			'legacy_sox_nvda':  1.0,
+			'fx':               0.5,
+			'nasdaq_futures':   None,
 		})
 		assert r['semi_score'] is not None
 		assert r['weight_redistributed'] is True
 		assert 'nasdaq_futures' not in r['used_axes']
-		assert len(r['used_axes']) == 4
+		assert len(r['used_axes']) == 3
 
 	def test_all_axes_none_returns_none(self):
 		from modules.semi_trigger.scoring import calc_semi_score
 		r = calc_semi_score({k: None for k in
-		                     ('us_memory', 'etf_flow', 'fx', 'foreign_flow', 'nasdaq_futures')})
+		                     ('us_memory', 'legacy_sox_nvda', 'fx', 'nasdaq_futures')})
 		assert r['semi_score'] is None

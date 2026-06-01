@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS daily_factors (
 	sox REAL,
 	nvda REAL,
 	mu REAL,
+	sox_nvda_avg REAL,
 	PRIMARY KEY (date, stock_code)
 );
 
@@ -83,7 +84,7 @@ def init_db(db_path: Optional[str] = None) -> None:
 		cur = conn.execute("PRAGMA table_info(daily_factors)")
 		cols = {row[1] for row in cur.fetchall()}
 		for new_col in ('nasdaq_futures', 'price_change', 'volume_amount',
-		                'volume_ratio', 'program_net'):
+		                'volume_ratio', 'program_net', 'sox_nvda_avg'):
 			if new_col not in cols:
 				conn.execute(f"ALTER TABLE daily_factors ADD COLUMN {new_col} REAL")
 		conn.commit()
@@ -121,7 +122,7 @@ def upsert_factors(date: str, stock_code: str, factors: dict,
 	all_cols = ('us_memory', 'etf_flow', 'fx_change', 'foreign_flow_5d',
 	            'memory_price', 'nasdaq_futures',
 	            'price_change', 'volume_amount', 'volume_ratio', 'program_net',
-	            'sox', 'nvda', 'mu')
+	            'sox', 'nvda', 'mu', 'sox_nvda_avg')
 	with connect(db_path) as conn:
 		# 기존 row 조회 (부분 upsert)
 		cur = conn.execute(

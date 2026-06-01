@@ -73,24 +73,19 @@ class TestCalcZscore:
 class TestCalcSemiScore:
 
 	def test_all_axes_present(self):
-		"""6/2 추가 수정: 8축 (us_memory 40% + 종목4신호 각 5% + fx 20% + foreign 10% + nq 10%)."""
+		"""Lee 6/2 최종: 4축 — us_mem 50% + legacy 30% + fx 10% + nq 10%."""
 		from modules.semi_trigger.scoring import calc_semi_score, WEIGHTS
 		z_values = {
-			'us_memory':       2.0,   # 0.40
-			'price_change':    1.0,   # 0.05
-			'volume_amount':   1.0,   # 0.05
-			'volume_ratio':    1.0,   # 0.05
-			'program_net':     1.0,   # 0.05
-			'fx':              0.5,   # 0.20
-			'foreign_flow':    1.0,   # 0.10
-			'nasdaq_futures':  0.3,   # 0.10
+			'us_memory':        2.0,   # 0.50
+			'legacy_sox_nvda':  1.5,   # 0.30
+			'fx':               0.5,   # 0.10
+			'nasdaq_futures':   0.3,   # 0.10
 		}
-		expected = (0.40 * 2.0 + 0.05 * 1.0 * 4 + 0.20 * 0.5
-		            + 0.10 * 1.0 + 0.10 * 0.3)
+		expected = (0.50 * 2.0 + 0.30 * 1.5 + 0.10 * 0.5 + 0.10 * 0.3)
 		r = calc_semi_score(z_values)
 		assert abs(r['semi_score'] - expected) < 1e-9
 		assert r['weight_redistributed'] is False
-		assert len(r['used_axes']) == 8
+		assert len(r['used_axes']) == 4
 
 	def test_all_none(self):
 		from modules.semi_trigger.scoring import calc_semi_score
@@ -101,28 +96,26 @@ class TestCalcSemiScore:
 		assert r['used_axes'] == []
 
 	def test_redistribution_when_missing_axis(self):
-		"""nasdaq_futures (10%) 결측 → 나머지 90% 비례 재분배."""
+		"""nasdaq_futures (10%) 결측 → 나머지 90% 비례 재분배 (4축 시스템)."""
 		from modules.semi_trigger.scoring import calc_semi_score
 		z_values = {
-			'us_memory':       1.0,   # 0.40 / 0.90 = 0.4444
-			'etf_flow':        1.0,   # 0.20 / 0.90 = 0.2222
-			'fx':              1.0,   # 0.20 / 0.90 = 0.2222
-			'foreign_flow':    1.0,   # 0.10 / 0.90 = 0.1111
-			'nasdaq_futures':  None,
+			'us_memory':        1.0,
+			'legacy_sox_nvda':  1.0,
+			'fx':               1.0,
+			'nasdaq_futures':   None,
 		}
 		r = calc_semi_score(z_values)
 		assert abs(r['semi_score'] - 1.0) < 1e-9
 		assert r['weight_redistributed'] is True
 		assert 'nasdaq_futures' not in r['used_axes']
-		assert len(r['used_axes']) == 4
+		assert len(r['used_axes']) == 3
 
 	def test_only_us_memory(self):
-		"""us_memory만 유효 → 다른 4축 결측 → us_memory에 100% 가중."""
+		"""us_memory만 유효 → 100% 가중."""
 		from modules.semi_trigger.scoring import calc_semi_score
 		r = calc_semi_score({
-			'us_memory':      2.5,
-			'etf_flow':       None, 'fx': None,
-			'foreign_flow':   None, 'nasdaq_futures': None,
+			'us_memory':        2.5,
+			'legacy_sox_nvda':  None, 'fx': None, 'nasdaq_futures': None,
 		})
 		assert r['semi_score'] == 2.5
 		assert r['weight_redistributed'] is True
