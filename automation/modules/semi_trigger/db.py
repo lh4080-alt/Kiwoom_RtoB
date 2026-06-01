@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS daily_factors (
 	foreign_flow_5d REAL,
 	memory_price REAL,
 	nasdaq_futures REAL,
+	price_change REAL,
+	volume_amount REAL,
+	volume_ratio REAL,
+	program_net REAL,
 	sox REAL,
 	nvda REAL,
 	mu REAL,
@@ -75,11 +79,13 @@ def init_db(db_path: Optional[str] = None) -> None:
 	os.makedirs(os.path.dirname(path), exist_ok=True)
 	with sqlite3.connect(path) as conn:
 		conn.executescript(SCHEMA_SQL)
-		# 기존 DB 마이그레이션 — nasdaq_futures 컬럼 부재 시 추가
+		# 기존 DB 마이그레이션 — 누락 컬럼 ALTER TABLE 추가
 		cur = conn.execute("PRAGMA table_info(daily_factors)")
 		cols = {row[1] for row in cur.fetchall()}
-		if 'nasdaq_futures' not in cols:
-			conn.execute("ALTER TABLE daily_factors ADD COLUMN nasdaq_futures REAL")
+		for new_col in ('nasdaq_futures', 'price_change', 'volume_amount',
+		                'volume_ratio', 'program_net'):
+			if new_col not in cols:
+				conn.execute(f"ALTER TABLE daily_factors ADD COLUMN {new_col} REAL")
 		conn.commit()
 	_initialized = True
 
@@ -113,7 +119,9 @@ def upsert_factors(date: str, stock_code: str, factors: dict,
 	08:30 morning 보완 패턴 지원).
 	"""
 	all_cols = ('us_memory', 'etf_flow', 'fx_change', 'foreign_flow_5d',
-	            'memory_price', 'nasdaq_futures', 'sox', 'nvda', 'mu')
+	            'memory_price', 'nasdaq_futures',
+	            'price_change', 'volume_amount', 'volume_ratio', 'program_net',
+	            'sox', 'nvda', 'mu')
 	with connect(db_path) as conn:
 		# 기존 row 조회 (부분 upsert)
 		cur = conn.execute(
@@ -131,11 +139,12 @@ def upsert_factors(date: str, stock_code: str, factors: dict,
 			else:
 				merged[c] = None
 		values = [merged[c] for c in all_cols]
+		col_names = ', '.join(all_cols)
+		placeholders = ', '.join(['?'] * (len(all_cols) + 2))
 		conn.execute(
-			"INSERT OR REPLACE INTO daily_factors "
-			"(date, stock_code, us_memory, etf_flow, fx_change, foreign_flow_5d, "
-			" memory_price, nasdaq_futures, sox, nvda, mu) "
-			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			f"INSERT OR REPLACE INTO daily_factors "
+			f"(date, stock_code, {col_names}) "
+			f"VALUES ({placeholders})",
 			(date, stock_code, *values),
 		)
 		conn.commit()

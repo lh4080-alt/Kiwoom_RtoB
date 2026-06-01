@@ -14,13 +14,16 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# 가중치 (확정값, 변경 금지 — spec v3 + Lee 6/2 수정)
+# 가중치 (Lee 6/2 추가 수정: etf_flow 20% → 종목별 4 sub-signal 각 5%)
 WEIGHTS = {
 	'us_memory':       0.40,
-	'etf_flow':        0.20,
+	'price_change':    0.05,  # 종목 주가 등락률
+	'volume_amount':   0.05,  # 종목 거래대금
+	'volume_ratio':    0.05,  # 거래량 / 직전5일평균 × 100
+	'program_net':     0.05,  # 프로그램 순매수 (원)
 	'fx':              0.20,
 	'foreign_flow':    0.10,
-	'nasdaq_futures':  0.10,  # 6/2: memory_price → NQ=F 교체 (08:30 재계산)
+	'nasdaq_futures':  0.10,
 }
 
 # baseline 최소 요구일수

@@ -27,21 +27,18 @@ def format_snapshot_message(output: dict, label: str) -> str:
 		f"📊 [semi_trigger {output.get('date')} {label}]",
 		f"({output.get('generated_at', '')})",
 		"",
-		f"가중: us_mem {weights['us_memory']*100:.0f}% / "
-		f"etf {weights['etf_flow']*100:.0f}% / fx {weights['fx']*100:.0f}% / "
-		f"foreign {weights['foreign_flow']*100:.0f}% / nq {weights['nasdaq_futures']*100:.0f}%",
+		f"가중: us_mem 40% / 종목4신호 각 5%(합20%) / fx 20% / foreign 10% / nq 10%",
 	]
 
 	for t in output.get('targets', []):
 		fr = t.get('factors_raw', {})
 		fz = t.get('factors_z', {})
 
-		def fmt_raw(v, suffix=''):
-			if v is None:
-				return 'N/A'
-			if suffix == '원':
-				return f"{v:>+18,.0f}원"
-			return f"{v:+.3f}%"
+		def fmt_pct(v):
+			return 'N/A' if v is None else f"{v:+.3f}%"
+
+		def fmt_won(v):
+			return 'N/A' if v is None else f"{v:>+15,.0f}원"
 
 		def fmt_z(v):
 			return f"z={v:+.2f}" if v is not None else "z=N/A"
@@ -58,11 +55,16 @@ def format_snapshot_message(output: dict, label: str) -> str:
 		lines.extend([
 			"",
 			f"━━ [{t['code']}] {t['name']} (baseline {base_str}) ━━",
-			f"  ① us_memory      {fmt_raw(fr.get('us_memory')):>10s}  {fmt_z(fz.get('us_memory'))}",
-			f"  ② etf_flow       {fmt_raw(fr.get('etf_flow'), '원')}  {fmt_z(fz.get('etf_flow'))}",
-			f"  ③ fx_change      {fmt_raw(fr.get('fx_change')):>10s}  {fmt_z(fz.get('fx'))}",
-			f"  ④ foreign_5d     {fmt_raw(fr.get('foreign_flow_5d'), '원')}  {fmt_z(fz.get('foreign_flow'))}",
-			f"  ⑤ nasdaq_futures {fmt_raw(fr.get('nasdaq_futures')):>10s}  {fmt_z(fz.get('nasdaq_futures'))}",
+			f"  ① us_memory      {fmt_pct(fr.get('us_memory'))}  {fmt_z(fz.get('us_memory'))}",
+			f"  ──── 종목 4신호 (각 5%) ────",
+			f"  주가 등락률      {fmt_pct(fr.get('price_change'))}  {fmt_z(fz.get('price_change'))}",
+			f"  거래대금         {fmt_won(fr.get('volume_amount'))}  {fmt_z(fz.get('volume_amount'))}",
+			f"  거래량 변화율    {fmt_pct(fr.get('volume_ratio'))}  {fmt_z(fz.get('volume_ratio'))}",
+			f"  프로그램 순매수  {fmt_won(fr.get('program_net'))}  {fmt_z(fz.get('program_net'))}",
+			f"  ────",
+			f"  ② fx_change      {fmt_pct(fr.get('fx_change'))}  {fmt_z(fz.get('fx'))}",
+			f"  ③ foreign_5d     {fmt_won(fr.get('foreign_flow_5d'))}  {fmt_z(fz.get('foreign_flow'))}",
+			f"  ④ nasdaq_futures {fmt_pct(fr.get('nasdaq_futures'))}  {fmt_z(fz.get('nasdaq_futures'))}",
 			f"  semi_score: {score_str}{redistr}  {trig} (≥{threshold})",
 			f"  legacy(SOX/NVDA/MU 2/3): {legacy}",
 		])

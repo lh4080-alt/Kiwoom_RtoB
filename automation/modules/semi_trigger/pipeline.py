@@ -26,6 +26,7 @@ from .collectors.fx import collect_fx_change
 from .collectors.foreign_flow import collect_foreign_flow_5d
 from .collectors.memory_price import collect_memory_price
 from .collectors.nasdaq_futures import collect_nasdaq_futures
+from .collectors.stock_factors import collect_stock_factors
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +38,13 @@ _BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.p
 _JSON_PATH = os.path.join(_BASE_DIR, 'config', 'data', 'daily_semi_trigger.json')
 
 
-# 축 → DB 컬럼 매핑 (z-score baseline 추출용)
-# Lee 6/2 수정: memory_price → nasdaq_futures 교체
+# 축 → DB 컬럼 매핑 (Lee 6/2: etf_flow → 종목별 4 sub-signal)
 AXIS_TO_DB_COL = {
 	'us_memory':       'us_memory',
-	'etf_flow':        'etf_flow',
+	'price_change':    'price_change',
+	'volume_amount':   'volume_amount',
+	'volume_ratio':    'volume_ratio',
+	'program_net':     'program_net',
 	'fx':              'fx_change',
 	'foreign_flow':    'foreign_flow_5d',
 	'nasdaq_futures':  'nasdaq_futures',
@@ -64,10 +67,13 @@ def calc_axes_zscores(eval_date: str, stock_code: str, raw_factors: dict,
 	baseline_rows = [r for r in recent if r.get('date') != eval_date]
 	baseline_days = len(baseline_rows)
 
-	# raw_factors 키 매핑
+	# raw_factors 키 매핑 (8축)
 	current_map = {
 		'us_memory':       raw_factors.get('us_memory'),
-		'etf_flow':        raw_factors.get('etf_flow'),
+		'price_change':    raw_factors.get('price_change'),
+		'volume_amount':   raw_factors.get('volume_amount'),
+		'volume_ratio':    raw_factors.get('volume_ratio'),
+		'program_net':     raw_factors.get('program_net'),
 		'fx':              raw_factors.get('fx_change'),
 		'foreign_flow':    raw_factors.get('foreign_flow_5d'),
 		'nasdaq_futures':  raw_factors.get('nasdaq_futures'),
@@ -99,19 +105,25 @@ async def run_pipeline_evening(eval_date: str, token: str,
 	base_dt = eval_date.replace('-', '')
 	logger.info(f"[pipeline_evening] start eval_date={eval_date}")
 
-	etf_flows, ff_005930, ff_000660 = await asyncio.gather(
-		collect_etf_flows(base_dt, token),
+	# foreign + 종목별 4 sub-signal 동시 수집 (etf_flow는 Lee 6/2 결정으로 제거)
+	ff_005930, ff_000660, sf_005930, sf_000660 = await asyncio.gather(
 		collect_foreign_flow_5d('005930', base_dt, token),
 		collect_foreign_flow_5d('000660', base_dt, token),
+		collect_stock_factors('005930', base_dt, token),
+		collect_stock_factors('000660', base_dt, token),
 		return_exceptions=False,
 	)
 
 	out = {}
 	for stock_code in TARGET_UNDERLYINGS:
 		fflow = ff_005930 if stock_code == '005930' else ff_000660
+		sf = sf_005930 if stock_code == '005930' else sf_000660
 		partial = {
-			'etf_flow':        etf_flows.get(stock_code, {}).get('etf_flow'),
 			'foreign_flow_5d': fflow,
+			'price_change':    sf.get('price_change'),
+			'volume_amount':   sf.get('volume_amount'),
+			'volume_ratio':    sf.get('volume_ratio'),
+			'program_net':     sf.get('program_net'),
 		}
 		st_db.upsert_factors(eval_date, stock_code, partial, db_path=db_path)
 		out[stock_code] = partial
@@ -172,8 +184,11 @@ async def run_pipeline_morning(eval_date: str, token: str, mode: str = 'shadow',
 		# DB에서 통합 row 조회 (evening 키 포함) — z-score / 출력용
 		existing = st_db.fetch_recent_factors(stock_code, n=10, db_path=db_path)
 		merged_row = next((r for r in existing if r.get('date') == eval_date), None) or {}
-		raw_factors['etf_flow']        = merged_row.get('etf_flow')
 		raw_factors['foreign_flow_5d'] = merged_row.get('foreign_flow_5d')
+		raw_factors['price_change']    = merged_row.get('price_change')
+		raw_factors['volume_amount']   = merged_row.get('volume_amount')
+		raw_factors['volume_ratio']    = merged_row.get('volume_ratio')
+		raw_factors['program_net']     = merged_row.get('program_net')
 
 		# z-score + semi_score + trigger
 		z_values, baseline_days = calc_axes_zscores(
@@ -188,12 +203,18 @@ async def run_pipeline_morning(eval_date: str, token: str, mode: str = 'shadow',
 		                semi_score >= threshold) else 0
 		legacy = calc_legacy_trigger(sox, nvda, mu)
 
+		# 4 sub-signal z 평균 (scores 테이블 etf_flow_z 슬롯 호환용)
+		sub_zs = [z_values.get(k) for k in
+		          ('price_change', 'volume_amount', 'volume_ratio', 'program_net')]
+		valid_sub = [z for z in sub_zs if z is not None]
+		sub_z_avg = sum(valid_sub) / len(valid_sub) if valid_sub else None
+
 		st_db.upsert_score(eval_date, stock_code, {
 			'us_memory_z':          z_values.get('us_memory'),
-			'etf_flow_z':           z_values.get('etf_flow'),
+			'etf_flow_z':           sub_z_avg,                          # 4 sub-signal 평균
 			'fx_z':                 z_values.get('fx'),
 			'foreign_flow_z':       z_values.get('foreign_flow'),
-			'memory_price_z':       z_values.get('nasdaq_futures'),  # 컬럼 재사용 (스키마 호환)
+			'memory_price_z':       z_values.get('nasdaq_futures'),     # 호환
 			'semi_score':           semi_score,
 			'trigger':              trigger,
 			'legacy_trigger':       legacy,

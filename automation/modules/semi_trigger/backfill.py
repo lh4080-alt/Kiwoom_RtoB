@@ -235,24 +235,96 @@ async def backfill_factors(end_dt: str, token: str,
 	# 백테스트 sanity: 같은 ISO 일자로 매핑 (보수적).
 	saved_per_stock = {u: 0 for u in TARGET_UNDERLYINGS}
 
+	# 6) 종목별 4 sub-signal history (ka10081 candles + ka90013 프로그램 일별)
+	from .collectors.stock_factors import (
+		calc_price_change, calc_volume_ratio, MILLION,
+	)
+	from .collectors.foreign_flow import _parse_signed
+	from api.program_trade import fn_ka90013
+
+	# 005930/000660 ka90013 일별 프로그램 매매 (단일 호출 → 100일치 + 페이징)
+	# 단순화: dt-split 페이징 비슷하게 또는 1회만 (rate limit 부담 감소)
+	program_history = {}  # {stock: {date(YYYYMMDD): net_won}}
+	for stock_code in TARGET_UNDERLYINGS:
+		net_by_date = {}
+		current_dt_p = end_dt
+		for _ in range(3):  # 최대 3회 호출 (~300일)
+			try:
+				resp = await fn_ka90013(stock_code, token, current_dt_p)
+			except Exception:
+				break
+			if not isinstance(resp, dict) or resp.get('return_code') != 0:
+				break
+			items = resp.get('stk_daly_prm_trde_trnsn', [])
+			if not items:
+				break
+			new_count = 0
+			for it in items:
+				d = str(it.get('dt', '')).strip()
+				if not d or d in net_by_date:
+					continue
+				net_mm = _parse_signed(it.get('prm_netprps_amt', ''))
+				net_by_date[d] = int(net_mm) * MILLION
+				new_count += 1
+			if new_count == 0:
+				break
+			oldest = min(net_by_date.keys())
+			from datetime import datetime as _dt2, timedelta as _td2
+			try:
+				current_dt_p = (_dt2.strptime(oldest, '%Y%m%d') - _td2(days=1)).strftime('%Y%m%d')
+			except Exception:
+				break
+			if current_dt_p < '20240101':
+				break
+			await asyncio.sleep(0.3)
+		program_history[stock_code] = net_by_date
+		logger.info(f"[backfill] ka90013 {stock_code} {len(net_by_date)}일")
+
 	# 005930/000660 일자 집합 (한국 영업일)
 	for stock_code in TARGET_UNDERLYINGS:
 		close_map = close_005930 if stock_code == '005930' else close_000660
+		stock_candles = code_to_candles.get(stock_code, [])
+		# 일자별 candle map
+		stock_candle_by_date = {c['date']: c for c in stock_candles}
+		# 일별 거래량 list (오름차순) — volume_ratio 직전 5일 평균용
+		sorted_candles_asc = sorted(stock_candles, key=lambda c: c['date'])
+
 		ff_map = foreign_5d_005930 if stock_code == '005930' else foreign_5d_000660
-		etf_map = etf_flow_by_underlying.get(stock_code, {})
+		prog_map = program_history.get(stock_code, {})
 
 		# 키움 일봉 일자 (YYYYMMDD) 기준 — 한국 영업일
-		for d_yyyymmdd in sorted(close_map.keys(), reverse=True)[:days_target]:
+		for idx, d_yyyymmdd in enumerate(sorted(close_map.keys(), reverse=True)[:days_target]):
 			d_iso = to_iso_date(d_yyyymmdd)
+			cur_candle = stock_candle_by_date.get(d_yyyymmdd, {})
+			# 직전 거래일 (sorted_candles_asc에서 d_yyyymmdd 위치 -1)
+			prev_close_v = 0
+			prev_vols_5 = []
+			# 직전 인접 거래일 찾기
+			for i, c in enumerate(sorted_candles_asc):
+				if c['date'] == d_yyyymmdd:
+					if i >= 1:
+						prev_close_v = sorted_candles_asc[i - 1].get('close', 0)
+					# 직전 5일 거래량
+					if i >= 1:
+						prev_vols_5 = [
+							sorted_candles_asc[j].get('volume', 0)
+							for j in range(max(0, i - 5), i)
+						]
+					break
+
 			factors = {
 				'us_memory':       us_memory_by_date.get(d_iso),
-				'etf_flow':        etf_map.get(d_yyyymmdd, 0),
 				'fx_change':       fx_by_date.get(d_iso),
 				'foreign_flow_5d': ff_map.get(d_yyyymmdd),
 				'nasdaq_futures':  nq_by_date.get(d_iso),
 				'sox':             sox_by_date.get(d_iso),
 				'nvda':            nvda_by_date.get(d_iso),
 				'mu':              yf_history.get(SYM_MU, {}).get(d_iso),
+				# 종목별 4 sub-signal
+				'price_change':    calc_price_change(cur_candle.get('close', 0), prev_close_v),
+				'volume_amount':   (int(cur_candle.get('trade_amount', 0)) * MILLION) if cur_candle.get('trade_amount') else None,
+				'volume_ratio':    calc_volume_ratio(cur_candle.get('volume', 0), prev_vols_5),
+				'program_net':     prog_map.get(d_yyyymmdd),
 			}
 			st_db.upsert_factors(d_iso, stock_code, factors, db_path=db_path)
 			saved_per_stock[stock_code] += 1

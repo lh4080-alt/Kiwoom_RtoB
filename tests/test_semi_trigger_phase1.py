@@ -73,20 +73,24 @@ class TestCalcZscore:
 class TestCalcSemiScore:
 
 	def test_all_axes_present(self):
-		"""6/2 변경: memory_price → nasdaq_futures."""
+		"""6/2 추가 수정: 8축 (us_memory 40% + 종목4신호 각 5% + fx 20% + foreign 10% + nq 10%)."""
 		from modules.semi_trigger.scoring import calc_semi_score, WEIGHTS
 		z_values = {
-			'us_memory':       2.0,  # 0.40
-			'etf_flow':        1.5,  # 0.20
-			'fx':              0.5,  # 0.20
-			'foreign_flow':    1.0,  # 0.10
-			'nasdaq_futures':  0.3,  # 0.10
+			'us_memory':       2.0,   # 0.40
+			'price_change':    1.0,   # 0.05
+			'volume_amount':   1.0,   # 0.05
+			'volume_ratio':    1.0,   # 0.05
+			'program_net':     1.0,   # 0.05
+			'fx':              0.5,   # 0.20
+			'foreign_flow':    1.0,   # 0.10
+			'nasdaq_futures':  0.3,   # 0.10
 		}
-		expected = (0.40 * 2.0 + 0.20 * 1.5 + 0.20 * 0.5 + 0.10 * 1.0 + 0.10 * 0.3)
+		expected = (0.40 * 2.0 + 0.05 * 1.0 * 4 + 0.20 * 0.5
+		            + 0.10 * 1.0 + 0.10 * 0.3)
 		r = calc_semi_score(z_values)
 		assert abs(r['semi_score'] - expected) < 1e-9
 		assert r['weight_redistributed'] is False
-		assert len(r['used_axes']) == 5
+		assert len(r['used_axes']) == 8
 
 	def test_all_none(self):
 		from modules.semi_trigger.scoring import calc_semi_score
