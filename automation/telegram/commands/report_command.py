@@ -165,15 +165,17 @@ async def report_command(token_manager, settings_manager=None, background_task_m
 		# 4. 💰 [보유 종목] - 항상 마지막에 전송
 		# ---------------------------------------------------------
 		account_data = None
-		while not account_data:
-				try:
-					account_data = await asyncio.wait_for(
-						fn_kt00004(False, 'N', '', token_manager.token),
-						timeout=10.0
-					)
-				except (asyncio.TimeoutError, Exception):
-					await asyncio.sleep(1)
-					continue
+		for _ in range(3):
+			try:
+				account_data = await asyncio.wait_for(
+					fn_kt00004(False, 'N', '', token_manager.token),
+					timeout=10.0
+				)
+				# 정상 응답이면 break (빈 리스트도 "보유 없음" 정상으로 인정)
+				break
+			except (asyncio.TimeoutError, Exception):
+				await asyncio.sleep(1)
+				continue
 
 		held_message = "💰 [보유 종목]\n\n"
 		if account_data:
