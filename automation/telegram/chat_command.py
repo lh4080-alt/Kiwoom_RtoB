@@ -713,6 +713,27 @@ class ChatCommand:
 		await tel_send(f"🗑️ [감시 취소] {c} 제거 — 감시 큐 {len(entries)}건")
 		return True
 
+	async def _cmd_holdings_clean(self, code: str) -> bool:
+		"""봇 holdings.json에서 잔재 entry 제거 (계좌 실제 보유 없는 종목).
+
+		용도: Feature 2 매도 시 자동 갱신 안 되던 옛 버그로 남은 잔재, 또는
+		Lee가 HTS에서 수동 매도 후 봇 holdings 정합성 회복.
+		영구 원칙 #30 준수 — 봇 데몬 내부에서만 실행.
+		"""
+		from utils.holdings import remove_holding, load_holdings
+		c = str(code).strip()
+		removed = await remove_holding(c)
+		holdings = await load_holdings()
+		if removed is None:
+			await tel_send(f"❌ {c} 는 holdings.json에 없음 (현재 {len(holdings)}건)")
+			return False
+		await tel_send(
+			f"🗑️ [holdings 청소] {c} 제거 — {removed.get('buy_qty', '-')}주 "
+			f"@ {removed.get('buy_price', 0):,}원 ({removed.get('buy_date', '-')})\n"
+			f"holdings.json 총 {len(holdings)}건"
+		)
+		return True
+
 	async def _cmd_stick(self, args: list) -> bool:
 		"""stick 종목 영구 등록 — 매일 08:30 SOX/NQ 조건 충족 시 자동 매수.
 
@@ -928,6 +949,13 @@ class ChatCommand:
 				return await self._cmd_watching_cancel(parts[1])
 			else:
 				await tel_send("❌ 사용법: watching_cancel <종목코드>")
+				return False
+		elif command.startswith('holdings_clean '):
+			parts = command.split()
+			if len(parts) == 2:
+				return await self._cmd_holdings_clean(parts[1])
+			else:
+				await tel_send("❌ 사용법: holdings_clean <종목코드>")
 				return False
 		elif command == 'stick_list':
 			return await self._cmd_stick_list()

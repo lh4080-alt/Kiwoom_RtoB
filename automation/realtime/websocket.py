@@ -2249,7 +2249,20 @@ class UnifiedWebSocket:
 			
 			# 매도 성공 시 기록
 			record_sold_stock(stock_code)
-			
+
+			# Phase 2 봇 holdings.json 갱신 — Feature 2가 매도해도 봇 holdings 잔재 사고 회피
+			# (5/29 003490/006400 사고: Feature 2 slr 매도 → holdings.json 잔재 → 6/1 09:35 정합성 알림)
+			try:
+				from utils.holdings import remove_holding
+				from utils.pnl_tracker import record_realized
+				avg_p = stock_data.get('avg_price', 0)
+				pnl = int((current_price - avg_p) * quantity) if (avg_p and quantity) else 0
+				removed = await remove_holding(stock_code)
+				if removed and pnl:
+					await record_realized(pnl)
+			except Exception as e:
+				print(f"[feature2] holdings.json 갱신 실패 {stock_code}: {e}")
+
 			# 텔레그램 알림
 			result_emoji = "🔴" if reason == "익절" else "🔵" if reason == "손절" else "🟡"
 			message = f'{result_emoji} {stock_data["name"]} ({stock_code}) {quantity}주 매도 주문 (수익율: {profit_rate:.2f}%) [{reason}]'
