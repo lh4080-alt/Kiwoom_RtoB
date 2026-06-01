@@ -96,74 +96,81 @@ def format_snapshot_message(output: dict, label: str,
                              z_histories: dict = None) -> str:
 	"""snapshot output → 텔레그램 메시지 (Lee 6/2 최종 포맷).
 
-	z_histories: {stock_code: {axis: [z_d-3, ..., z_d]}}
+	구조:
+	  - 공통 4축 (최상위, 한 번만): us_memory, legacy(SOX·NVDA), fx, nasdaq_futures + semi_score
+	  - 종목별 (005930, 000660): 종목별 4신호 + 외인 5일
+
+	z_histories: {stock_code: {axis: [z_d-3, ..., z_d]}}  — 공통 4축은 005930 사용
 	"""
-	weights = output.get('params', {}).get('weights', WEIGHTS)
 	threshold = output.get('params', {}).get('threshold', 1.0)
+	targets = output.get('targets', [])
+	if not targets:
+		return f"📊 [semi_trigger {output.get('date')} {label}] — targets 없음"
+
+	# 공통 4축은 005930 기준 (글로벌 raw 동일)
+	common = targets[0]
+	fr = common.get('factors_raw', {})
+	zh_common = (z_histories or {}).get(common['code'], {})
+
+	def z_for(zh, axis):
+		return fmt_z_history(zh.get(axis, [None] * Z_HISTORY_DAYS))
+
+	# us_memory 하위 4종 (라이브 fetch)
+	us_mem_sub = output.get('us_memory_sub', {})
+	# SOX/NVDA raw + 평균
+	sox = fr.get('sox')
+	nvda = fr.get('nvda')
+	legacy_avg = (sox + nvda) / 2.0 if (sox is not None and nvda is not None) else None
+
+	# 점수 정보 (모든 종목 동일하지만 첫 번째 사용)
+	semi_score = common.get('semi_score')
+	score_str = f"{semi_score:+.3f}" if semi_score is not None else "N/A"
+	trig = "🎯 TRIGGER" if common.get('trigger') else "⏸️ 미달"
+	redistr = " (가중재분배)" if common.get('weight_redistributed') else ""
 
 	lines = [
 		f"📊 [semi_trigger {output.get('date')} {label}]",
 		f"({output.get('generated_at', '')})",
 		"",
 		f"점수 가중: us_mem 50% / legacy(SOX·NVDA) 30% / fx 10% / nq 10%",
+		"",
+		"━━ 공통 4축 (점수 산출) ━━",
+		"",
+		f"① us_memory (50%)  {fmt_pct(fr.get('us_memory'))}  z={z_for(zh_common, 'us_memory')}",
 	]
+	if us_mem_sub:
+		for sym in ('MU', 'WDC', 'SNDK', 'STX'):
+			v = us_mem_sub.get(sym)
+			lines.append(f"   ─ {sym:<4s} {fmt_pct(v)}")
+	lines.extend([
+		"",
+		f"② legacy(SOX·NVDA) (30%)  {fmt_pct(legacy_avg)}  z={z_for(zh_common, 'legacy_sox_nvda')}",
+		f"   ─ SOX  {fmt_pct(sox)}",
+		f"   ─ NVDA {fmt_pct(nvda)}",
+		"",
+		f"③ fx_change (10%)  {fmt_pct(fr.get('fx_change'))}  z={z_for(zh_common, 'fx')}",
+		f"④ nasdaq_futures (10%)  {fmt_pct(fr.get('nasdaq_futures'))}  z={z_for(zh_common, 'nasdaq_futures')}",
+		"",
+		f"semi_score: {score_str}{redistr}  {trig} (≥{threshold})",
+	])
 
-	for t in output.get('targets', []):
-		fr = t.get('factors_raw', {})
-		fz = t.get('factors_z', {})
+	# 종목별 섹션 (종목별 4신호 + 외인 5일)
+	for t in targets:
 		code = t['code']
+		fr_t = t.get('factors_raw', {})
 		zh = (z_histories or {}).get(code, {})
-
-		def z_for(axis):
-			return fmt_z_history(zh.get(axis, [None] * Z_HISTORY_DAYS))
-
-		semi_score = t.get('semi_score')
-		score_str = f"{semi_score:+.3f}" if semi_score is not None else "N/A"
-		trig = "🎯 TRIGGER" if t.get('trigger') else "⏸️ 미달"
 		base = t.get('baseline_days', 0)
 		base_ok = t.get('baseline_sufficient')
 		base_str = f"{base}일 ✅" if base_ok else f"{base}일 ⚠️부족"
-		legacy_bin = "🟢 ON" if t.get('legacy_trigger') else "⚪ OFF"
-		redistr = " (가중재분배)" if t.get('weight_redistributed') else ""
-
-		# SOX/NVDA raw
-		sox = fr.get('sox')
-		nvda = fr.get('nvda')
-		legacy_avg = (sox + nvda) / 2.0 if (sox is not None and nvda is not None) else None
-
-		# us_memory 하위 4종 (메시지 전체에 한 번만 표시)
-		us_mem_sub = output.get('us_memory_sub', {})
 
 		lines.extend([
 			"",
 			f"━━ [{code}] {t['name']} (baseline {base_str}) ━━",
-			"",
-			f"① us_memory (50%)  {fmt_pct(fr.get('us_memory'))}  z={z_for('us_memory')}",
-		])
-		# MU/WDC/SNDK/STX 하위 표시
-		if us_mem_sub:
-			for sym in ('MU', 'WDC', 'SNDK', 'STX'):
-				v = us_mem_sub.get(sym)
-				v_str = fmt_pct(v)
-				lines.append(f"   ─ {sym:<4s} {v_str}")
-		lines.extend([
-			"",
-			f"② legacy(SOX·NVDA) (30%)  {fmt_pct(legacy_avg)}  z={z_for('legacy_sox_nvda')}",
-			f"   ─ SOX  {fmt_pct(sox)}",
-			f"   ─ NVDA {fmt_pct(nvda)}",
-			"",
-			f"③ fx_change (10%)  {fmt_pct(fr.get('fx_change'))}  z={z_for('fx')}",
-			f"④ nasdaq_futures (10%)  {fmt_pct(fr.get('nasdaq_futures'))}  z={z_for('nasdaq_futures')}",
-			"",
-			f"semi_score: {score_str}{redistr}  {trig} (≥{threshold})",
-			f"legacy(SOX/NVDA/MU 2/3): {legacy_bin}",
-			"",
-			"── 종목별 4신호 (참고 정보, 점수 X) ──",
-			f"주가 등락률      {fmt_pct(fr.get('price_change'))}  z={z_for('price_change')}",
-			f"거래대금         {fmt_won(fr.get('volume_amount'))}  z={z_for('volume_amount')}",
-			f"거래량 변화율    {fmt_pct(fr.get('volume_ratio'))}  z={z_for('volume_ratio')}",
-			f"프로그램 순매수  {fmt_won(fr.get('program_net'))}  z={z_for('program_net')}",
-			f"외인 5일 누적    {fmt_won(fr.get('foreign_flow_5d'))}  z={z_for('foreign_flow')}",
+			f"  주가 등락률      {fmt_pct(fr_t.get('price_change'))}  z={z_for(zh, 'price_change')}",
+			f"  거래대금         {fmt_won(fr_t.get('volume_amount'))}  z={z_for(zh, 'volume_amount')}",
+			f"  거래량 변화율    {fmt_pct(fr_t.get('volume_ratio'))}  z={z_for(zh, 'volume_ratio')}",
+			f"  프로그램 순매수  {fmt_won(fr_t.get('program_net'))}  z={z_for(zh, 'program_net')}",
+			f"  외인 5일 누적    {fmt_won(fr_t.get('foreign_flow_5d'))}  z={z_for(zh, 'foreign_flow')}",
 		])
 
 	lines.append("\n📌 z 트렌드: 3일전/2일전/어제/오늘")
@@ -212,15 +219,16 @@ async def take_snapshot(token: str, eval_date: str, label: str = 'manual',
 
 
 def resolve_eval_date(db_path: Optional[str] = None) -> Optional[str]:
-	"""가장 최근 정상 일자 자동 추출.
+	"""가장 최근 정상 evening 완료 일자 자동 추출.
 
-	기준: us_memory가 None 아닌 가장 최근 일자 (백필 완료 표시).
+	조건: us_memory + volume_amount 둘 다 있음 (evening + morning 완료).
+	morning만 호출된 row (us_mem 있고 종목별 4신호 None)는 제외.
 	"""
 	from . import db as st_db
 	from .etf_mapping import TARGET_UNDERLYINGS
 	rows = st_db.fetch_recent_factors(TARGET_UNDERLYINGS[0], n=20, db_path=db_path)
 	for r in rows:
-		um = r.get('us_memory')
-		if um is not None:
+		if r.get('us_memory') is not None and r.get('volume_amount') is not None:
 			return r.get('date')
+	# 폴백 — 정상 일자 없으면 가장 최근
 	return rows[0].get('date') if rows else None
