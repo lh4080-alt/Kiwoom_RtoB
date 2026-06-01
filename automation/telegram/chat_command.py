@@ -621,9 +621,11 @@ class ChatCommand:
 
 		# 종목코드 검증 (원본 buy_command과 동일)
 		code = str(args[0]).strip()
-		if not code.isdigit() or len(code) != 6:
-			await tel_send(f"❌ 종목코드는 6자리 숫자여야 합니다. (입력: {code})")
+		import re as _re
+		if not _re.match(r'^[\dA-Z]{6}$', code.upper()) or len(code) != 6:
+			await tel_send(f"❌ 종목코드는 6자리 (숫자 또는 영문 대문자)여야 합니다. (입력: {code})")
 			return False
+		code = code.upper()
 
 		# 수량 파싱 (원본 buy_command Case 2 패턴)
 		qty = 1
@@ -734,9 +736,11 @@ class ChatCommand:
 			return False
 
 		code = str(args[0]).strip()
-		if not code.isdigit() or len(code) != 6:
-			await tel_send(f"❌ 종목코드는 6자리 숫자여야 합니다. (입력: {code})")
+		import re as _re
+		if not _re.match(r'^[\dA-Z]{6}$', code.upper()) or len(code) != 6:
+			await tel_send(f"❌ 종목코드는 6자리 (숫자 또는 영문 대문자)여야 합니다. (입력: {code})")
 			return False
+		code = code.upper()
 
 		qty = 1
 		if len(args) >= 2:
@@ -832,9 +836,11 @@ class ChatCommand:
 			return False
 
 		code = str(args[0]).strip()
-		if not code.isdigit() or len(code) != 6:
-			await tel_send(f"❌ 종목코드는 6자리 숫자여야 합니다. (입력: {code})")
+		import re as _re
+		if not _re.match(r'^[\dA-Z]{6}$', code.upper()) or len(code) != 6:
+			await tel_send(f"❌ 종목코드는 6자리 (숫자 또는 영문 대문자)여야 합니다. (입력: {code})")
 			return False
+		code = code.upper()
 
 		# args[1:] 파싱 — 키워드 tpr/slr 추출, 나머지 첫 숫자는 수량
 		qty = 1
