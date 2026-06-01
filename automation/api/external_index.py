@@ -72,6 +72,44 @@ async def fetch_change_pct(symbol: str) -> Optional[float]:
 	return await asyncio.to_thread(_fetch_change_pct_sync, symbol)
 
 
+def _fetch_history_sync(symbol: str, period: str = '1y') -> dict:
+	"""yfinance 일별 등락률 history.
+
+	Returns: {'YYYY-MM-DD': change_pct, ...}
+	  change_pct = (close[i] - close[i-1]) / close[i-1] × 100
+	빈 dict이면 실패.
+	"""
+	try:
+		import yfinance as yf
+	except ImportError:
+		logger.error("yfinance 미설치")
+		return {}
+	try:
+		t = yf.Ticker(symbol)
+		hist = t.history(period=period, interval='1d')
+		if hist is None or len(hist) < 2:
+			return {}
+		closes = hist['Close'].dropna()
+		if len(closes) < 2:
+			return {}
+		result = {}
+		for i in range(1, len(closes)):
+			prev = float(closes.iloc[i - 1])
+			cur = float(closes.iloc[i])
+			if prev > 0:
+				date_iso = closes.index[i].strftime('%Y-%m-%d')
+				result[date_iso] = (cur - prev) / prev * 100.0
+		return result
+	except Exception:
+		logger.exception(f"yfinance history fetch 실패: {symbol}")
+		return {}
+
+
+async def fetch_history(symbol: str, period: str = '1y') -> dict:
+	"""비동기 래퍼 — yfinance history 일별 등락률 dict."""
+	return await asyncio.to_thread(_fetch_history_sync, symbol, period)
+
+
 async def fetch_semi_trio() -> dict:
 	"""SOX + NVDA + MU 등락률 동시 조회. 각 실패 시 None.
 

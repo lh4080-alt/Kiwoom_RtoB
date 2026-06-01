@@ -1,0 +1,252 @@
+"""semi_trigger 1년치 과거 데이터 백필 — Phase 6a.
+
+매일 5축 raw 값을 daily_factors 테이블에 저장. 이후 backtest 엔진이 walk-forward
+방식으로 z-score + semi_score + trigger 시뮬레이션.
+
+데이터 소스 (1년 기준 ≈ 252 영업일):
+  yfinance history(period='1y'): MU/WDC/SNDK/STX + ^SOX/NVDA + KRW=X
+  ka10081 (1회 호출): 14 ETF + 005930/000660 (415일치 응답 — 1년 충분)
+  ka10059 페이징: 005930/000660 외인 일별 (100일/page → 3페이지 ~300일)
+
+영구 원칙 #30: 봇 데몬 내부에서만 실행.
+"""
+import asyncio
+import logging
+from datetime import datetime, timedelta
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+
+async def fetch_ka10059_year(stk_cd: str, end_dt: str, token: str,
+                              pages: int = 3) -> list:
+	"""ka10059 페이징으로 1년치 외인 일별 매매.
+
+	100일/page × 3페이지 = ≈300일치. cont_yn / next_key 페이징.
+
+	Args:
+		stk_cd: 종목코드
+		end_dt: 최신 기준일 YYYYMMDD
+		token: API 토큰
+		pages: 호출 횟수 (기본 3)
+
+	Returns: [{date: YYYYMMDD, frgnr_invsr: int (천주, 부호유지), close: int (원)}, ...]
+	  date DESC. 종가는 acc_trde_qty 동행 응답에 없으므로 ka10081에서 별도 매핑.
+	  본 함수는 외인 raw qty만 반환 (날짜 + frgnr_qty).
+	"""
+	from api.inv_trade_trend import fn_ka10059
+	from modules.semi_trigger.collectors.foreign_flow import _parse_signed
+
+	all_items = []
+	cont_yn = 'N'
+	next_key = ''
+	for _ in range(pages):
+		try:
+			resp = await fn_ka10059(stk_cd, token, end_dt,
+			                       cont_yn=cont_yn, next_key=next_key)
+		except Exception:
+			logger.exception(f"[backfill] ka10059 페이징 실패 {stk_cd}")
+			break
+		if not isinstance(resp, dict) or resp.get('return_code') != 0:
+			logger.warning(f"[backfill] ka10059 rc={resp.get('return_code') if isinstance(resp, dict) else 'N/A'}")
+			break
+		items = resp.get('stk_invsr_orgn', [])
+		if not items:
+			break
+		all_items.extend(items)
+		# 다음 페이지
+		cont_yn = resp.get('cont-yn', 'N') or 'N'
+		next_key = resp.get('next-key', '') or ''
+		if cont_yn != 'Y':
+			break
+
+	parsed = []
+	for it in all_items:
+		date = str(it.get('dt', '')).strip()
+		if not date:
+			continue
+		parsed.append({
+			'date':    date,
+			'frgnr_invsr': _parse_signed(it.get('frgnr_invsr', '')),
+		})
+	logger.info(f"[backfill] ka10059 {stk_cd} 수집 {len(parsed)}일")
+	return parsed
+
+
+def aggregate_foreign_5d_history(daily_items: list, close_by_date: dict) -> dict:
+	"""외인 일별 → 각 일자별 5일 누적 (원).
+
+	Args:
+		daily_items: [{date: YYYYMMDD, frgnr_invsr: 천주}, ...] (date DESC)
+		close_by_date: {YYYYMMDD: 종가(원)} (ka10081 candles에서 추출)
+
+	Returns: {YYYYMMDD: 5d 누적(원), ...}
+	  각 일자 d 기준: items[i..i+4]의 frgnr_invsr 합 × 1000 × close[d].
+	  5일 미만이면 가용 일수로 계산.
+	"""
+	out = {}
+	for i, base_item in enumerate(daily_items):
+		date = base_item['date']
+		close = close_by_date.get(date, 0)
+		if close <= 0:
+			continue
+		# 그날 + 직전 4일 합 (총 5일)
+		window = daily_items[i:i + 5]
+		total_qty = sum(x.get('frgnr_invsr', 0) for x in window)
+		out[date] = int(total_qty * 1000 * close)
+	return out
+
+
+def aggregate_etf_flow_history(etf_to_candles: dict) -> dict:
+	"""ETF 14종 일별 거래대금 → 기초종목별 일자별 합산 (원).
+
+	Args:
+		etf_to_candles: {etf_code: [{date, trade_amount(백만원), close, ...}, ...]}
+
+	Returns: {underlying: {date: total_flow(원), ...}}
+	"""
+	from .etf_mapping import ETF_TO_UNDERLYING, TARGET_UNDERLYINGS
+	from .collectors.etf_flow import TRDE_PRICA_TO_WON
+
+	by_underlying = {u: {} for u in TARGET_UNDERLYINGS}
+	for etf_code, candles in etf_to_candles.items():
+		underlying = ETF_TO_UNDERLYING.get(etf_code)
+		if underlying not in by_underlying:
+			continue
+		for c in candles or []:
+			date = c.get('date')
+			if not date:
+				continue
+			amount_won = int(c.get('trade_amount', 0)) * TRDE_PRICA_TO_WON
+			by_underlying[underlying][date] = (
+				by_underlying[underlying].get(date, 0) + amount_won
+			)
+	return by_underlying
+
+
+def to_iso_date(yyyymmdd: str) -> str:
+	"""YYYYMMDD → YYYY-MM-DD."""
+	if not yyyymmdd or len(yyyymmdd) < 8:
+		return ''
+	return f"{yyyymmdd[:4]}-{yyyymmdd[4:6]}-{yyyymmdd[6:8]}"
+
+
+async def backfill_factors(end_dt: str, token: str,
+                            days_target: int = 252,
+                            db_path: Optional[str] = None) -> dict:
+	"""1년치 (252영업일) 과거 5축 raw 값을 daily_factors 테이블에 저장.
+
+	Args:
+		end_dt: 최신 기준일 YYYYMMDD (오늘 또는 가장 최근 영업일)
+		token: 키움 API 토큰
+		days_target: 백필 목표 일수 (기본 252)
+		db_path: DB 경로 override (테스트용)
+
+	Returns: {
+	  'saved_days': int,         # 저장한 일자 수 (per stock)
+	  'sources': {'us_memory': N일, 'etf_flow': ..., 'fx': ..., 'foreign_flow': ...},
+	  'us_memory_dates': set,    # 디버그용
+	}
+	"""
+	from . import db as st_db
+	from .etf_mapping import ETF_TO_UNDERLYING, TARGET_UNDERLYINGS
+	from .collectors.us_memory import calc_us_memory
+	from api.external_index import (
+		fetch_history, US_MEMORY_SYMBOLS, SYM_SOX, SYM_NVDA, SYM_MU, SYM_USDKRW,
+	)
+	from api.daily_candle import fn_ka10081
+
+	logger.info(f"[backfill] start end_dt={end_dt} target={days_target}일")
+
+	# 1) yfinance 1년치 history — US 메모리 4종 + 보조 3종 + FX
+	yf_symbols = list(US_MEMORY_SYMBOLS) + [SYM_SOX, SYM_NVDA, SYM_USDKRW]
+	yf_results = await asyncio.gather(
+		*[fetch_history(s, period='1y') for s in yf_symbols]
+	)
+	yf_history = dict(zip(yf_symbols, yf_results))
+	logger.info(f"[backfill] yfinance 수집 {[len(h) for h in yf_results]}")
+
+	# us_memory 일자별 평균
+	all_dates_set = set()
+	for s in US_MEMORY_SYMBOLS:
+		all_dates_set.update(yf_history.get(s, {}).keys())
+	us_memory_by_date = {}
+	for d in all_dates_set:
+		symbol_to_pct = {
+			s: yf_history.get(s, {}).get(d) for s in US_MEMORY_SYMBOLS
+		}
+		us_memory_by_date[d] = calc_us_memory(symbol_to_pct)
+
+	fx_by_date = yf_history.get(SYM_USDKRW, {})
+	sox_by_date = yf_history.get(SYM_SOX, {})
+	nvda_by_date = yf_history.get(SYM_NVDA, {})
+
+	# 2) ka10081 — 14 ETF + 2 underlying 일봉 (1년치 ~415일 응답 충분)
+	etf_codes = list(ETF_TO_UNDERLYING.keys())
+	all_codes = etf_codes + list(TARGET_UNDERLYINGS)
+	candle_results = await asyncio.gather(
+		*[fn_ka10081(c, base_dt=end_dt, token=token, silent=True) for c in all_codes],
+		return_exceptions=True,
+	)
+	code_to_candles = {}
+	for c, r in zip(all_codes, candle_results):
+		if isinstance(r, Exception):
+			code_to_candles[c] = []
+			continue
+		if not isinstance(r, dict) or r.get('return_code') != 0:
+			code_to_candles[c] = []
+			continue
+		code_to_candles[c] = r.get('candles', [])
+
+	# 기초종목 close map (date YYYYMMDD → close 원)
+	close_005930 = {c['date']: c['close'] for c in code_to_candles.get('005930', [])}
+	close_000660 = {c['date']: c['close'] for c in code_to_candles.get('000660', [])}
+
+	# ETF 일자별 거래대금 합산
+	etf_candles = {c: code_to_candles[c] for c in etf_codes}
+	etf_flow_by_underlying = aggregate_etf_flow_history(etf_candles)
+
+	# 3) ka10059 — 외인 일별 (페이징)
+	foreign_005930_items = await fetch_ka10059_year('005930', end_dt, token)
+	foreign_000660_items = await fetch_ka10059_year('000660', end_dt, token)
+
+	# 외인 5일 누적 (per date)
+	foreign_5d_005930 = aggregate_foreign_5d_history(foreign_005930_items, close_005930)
+	foreign_5d_000660 = aggregate_foreign_5d_history(foreign_000660_items, close_000660)
+
+	# 4) 일자별 통합 — us_memory 날짜 기준 (한국과 미국 시차 1일)
+	# 한국 영업일 d 시점에 us_memory는 직전 미국 거래일 데이터 반영. 단순화 — d 동일.
+	# yfinance는 미국 시각 ISO 일자라 한국 매핑 시 -1일 또는 동일일 처리 필요.
+	# 백테스트 sanity: 같은 ISO 일자로 매핑 (보수적).
+	saved_per_stock = {u: 0 for u in TARGET_UNDERLYINGS}
+
+	# 005930/000660 일자 집합 (한국 영업일)
+	for stock_code in TARGET_UNDERLYINGS:
+		close_map = close_005930 if stock_code == '005930' else close_000660
+		ff_map = foreign_5d_005930 if stock_code == '005930' else foreign_5d_000660
+		etf_map = etf_flow_by_underlying.get(stock_code, {})
+
+		# 키움 일봉 일자 (YYYYMMDD) 기준 — 한국 영업일
+		for d_yyyymmdd in sorted(close_map.keys(), reverse=True)[:days_target]:
+			d_iso = to_iso_date(d_yyyymmdd)
+			factors = {
+				'us_memory':       us_memory_by_date.get(d_iso),
+				'etf_flow':        etf_map.get(d_yyyymmdd, 0),
+				'fx_change':       fx_by_date.get(d_iso),
+				'foreign_flow_5d': ff_map.get(d_yyyymmdd),
+				'memory_price':    None,  # Phase 4 placeholder
+				'sox':             sox_by_date.get(d_iso),
+				'nvda':            nvda_by_date.get(d_iso),
+				'mu':              yf_history.get(SYM_MU, {}).get(d_iso),
+			}
+			st_db.upsert_factors(d_iso, stock_code, factors, db_path=db_path)
+			saved_per_stock[stock_code] += 1
+
+	logger.info(f"[backfill] 완료 saved={saved_per_stock}")
+	return {
+		'saved_per_stock': saved_per_stock,
+		'us_memory_dates': len(us_memory_by_date),
+		'etf_count': len(etf_codes),
+		'foreign_005930_days': len(foreign_005930_items),
+		'foreign_000660_days': len(foreign_000660_items),
+	}
