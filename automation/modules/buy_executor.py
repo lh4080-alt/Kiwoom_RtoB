@@ -284,7 +284,8 @@ class BuyExecutor:
 		  3) 갭상승/하락 차단 (우리 보강 유지)
 		  4) fn_kt10000으로 매수 (ord_uv=bid)
 
-		source='stick'은 "이미 보유 중" 필터를 우회 (매일 누적 매수 의도).
+		"이미 보유 중" 필터는 제거됨 (Lee 결정 6/1) — 의도적 추가 매수 허용.
+		키움 계좌가 자동으로 가중평균 매입가 산정 + Feature 2 평균가 기준 손절/익절.
 		나머지 필터(미체결/쿨다운/자동매매금지/갭)는 그대로 적용.
 
 		Returns dict with keys: code, status, price, ord_no, open, prev.
@@ -292,7 +293,6 @@ class BuyExecutor:
 		from api.stock_info import fn_ka10001 as stock_info
 		from api.check_bid import fn_ka10004 as check_bid
 		from api.buy_stock import fn_kt10000
-		from api.acc_val import fn_kt00004 as get_my_stocks
 		from api.check_unfilled import fn_ka10075 as check_unfilled
 		from utils.sold_stocks_manager import is_in_cooldown
 		from utils.blocklist_checker import is_blocked
@@ -304,17 +304,8 @@ class BuyExecutor:
 			if is_blocked(code):
 				return {'code': code, 'status': 'failed_blacklist'}
 
-			# ── 안전망 2: 이미 보유 중인지 (stick은 우회 — 매일 누적 매수)
-			if source != 'stick':
-				try:
-					my_stocks = await get_my_stocks(print_df=False, token=token)
-					if isinstance(my_stocks, list):
-						for stock in my_stocks:
-							if normalize_stock_code(stock.get('stk_cd', '')) == code:
-								return {'code': code, 'status': 'failed_already_held'}
-				except Exception:
-					logger.exception(f"[_buy_one] {code} 보유 조회 실패 (매수 중단)")
-					return {'code': code, 'status': 'failed_my_stocks_query'}
+			# ── 안전망 2 (제거됨): 이미 보유 중 차단 → 의도적 추가 매수 허용
+			#    키움 계좌가 자동 가중평균 매입가, Feature 2 평균가 기준 손절/익절 처리.
 
 			# ── 안전망 3: 미체결 (같은 종목 중복 주문 방지)
 			try:
