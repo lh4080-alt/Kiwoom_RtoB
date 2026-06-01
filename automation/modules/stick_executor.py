@@ -255,12 +255,11 @@ class StickExecutor:
 				if now.hour == 0:
 					self._reset_daily_flags()
 
-				# 08:30~08:45 pre-market 체크
-				if PRE_OPEN_START <= cur_t < PRE_OPEN_END and not self._fetched_today:
-					if should_retry_fetch(self._fetch_attempts, self._last_fetch_attempt_at, now):
-						await self._do_pre_market_check(now)
+				# 08:30~08:45 pre-market 자동 매수 — Lee 6/2 결정으로 차단됨.
+				# semi 정보는 SnapshotScheduler(02:00/05:30)와 텔레그램 score 명령으로 조회.
+				# 매수는 Lee 수동 pick.
 
-				# 15:20 1차 동시호가 매도
+				# 15:20 1차 동시호가 매도 — stick 등록 종목 청산 (유지)
 				if CLOSING_AUCTION_FIRST <= cur_t < CLOSING_AUCTION_RETRY and not self._sell_attempted_first:
 					self._sell_attempted_first = True
 					await self._closing_auction_sell(retry=False)

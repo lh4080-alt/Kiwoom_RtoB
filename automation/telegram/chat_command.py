@@ -115,6 +115,10 @@ class ChatCommand:
 		# stick — 매일 08:30 SOX/NQ 체크 후 자동 매수 + 15:20 동시호가 매도
 		from modules.stick_executor import StickExecutor
 		self.stick_executor = StickExecutor(bot_ref=self)
+
+		# semi_trigger snapshot 스케줄러 (02:00 + 05:30 KST 자동 + 텔레그램 score 명령)
+		from modules.semi_trigger.scheduler import SnapshotScheduler
+		self.snapshot_scheduler = SnapshotScheduler(bot_ref=self)
 	
 	async def _reconnect_with_retry(self, was_feature_1_active: bool):
 		"""연결 끊김 이후 토큰 발급/웹소켓 재연결을 재시도합니다."""
@@ -713,6 +717,33 @@ class ChatCommand:
 		await tel_send(f"🗑️ [감시 취소] {c} 제거 — 감시 큐 {len(entries)}건")
 		return True
 
+	async def _cmd_score(self) -> bool:
+		"""semi_trigger 5축 + semi + legacy 즉시 조회 (DB write 포함).
+
+		Lee 수동 판단용 — 자동 02:00/05:30 외에 임의 시점에 호출.
+		"""
+		from modules.semi_trigger.snapshot import take_snapshot, resolve_eval_date
+
+		token = await self.token_manager.get_token()
+		if not token:
+			await tel_send("❌ 토큰 발급 실패 — score 조회 불가")
+			return False
+		eval_date = resolve_eval_date()
+		if not eval_date:
+			await tel_send(
+				"⚠️ [score] daily_factors 비어있음\n"
+				"어제 16:00 daily_analyzer evening pipeline 실행 여부 확인 필요"
+			)
+			return False
+		try:
+			await take_snapshot(token=token, eval_date=eval_date,
+			                    label='manual', send_telegram=True)
+			return True
+		except Exception as e:
+			logger.exception("[score] snapshot 실패")
+			await tel_send(f"❌ score 조회 중 오류: {e}")
+			return False
+
 	async def _cmd_holdings_clean(self, code: str) -> bool:
 		"""봇 holdings.json에서 잔재 entry 제거 (계좌 실제 보유 없는 종목).
 
@@ -957,6 +988,8 @@ class ChatCommand:
 			else:
 				await tel_send("❌ 사용법: holdings_clean <종목코드>")
 				return False
+		elif command == 'score':
+			return await self._cmd_score()
 		elif command == 'stick_list':
 			return await self._cmd_stick_list()
 		elif command.startswith('stick_cancel '):

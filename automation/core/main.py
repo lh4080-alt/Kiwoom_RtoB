@@ -318,6 +318,8 @@ class MainApp:
 			self.chat_command.watching_buyer.start()
 			# stick 매일 매수 + 동시호가 매도
 			self.chat_command.stick_executor.start()
+			# semi_trigger snapshot 스케줄러 (02:00 / 05:30 KST 자동 + 수동 score 명령)
+			self.chat_command.snapshot_scheduler.start()
 			# 봇 재시작 시 pnl_tracker realized_today 자정 후 리셋
 			from utils.pnl_tracker import reset_daily_if_new_day
 			await reset_daily_if_new_day()

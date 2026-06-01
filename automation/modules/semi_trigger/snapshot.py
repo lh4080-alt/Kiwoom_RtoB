@@ -1,0 +1,117 @@
+"""semi_trigger snapshot — Lee 수동 판단용 5축 + semi_score 즉시 조회.
+
+호출 3가지:
+  1. 자동 02:00 KST (미국 정규장 중반)
+  2. 자동 05:30 KST (미국 ET 16:30, 정규장 마감 30분 후)
+  3. 수동 텔레그램 `score` 명령
+
+모두 동일 함수 사용 — DB write 포함 (Lee 요구사항: "데이터는 모두 저장").
+"""
+import asyncio
+import logging
+from datetime import datetime
+from typing import Optional
+
+from .pipeline import run_pipeline_morning
+from .scoring import WEIGHTS, BASELINE_MIN_DAYS
+
+logger = logging.getLogger(__name__)
+
+
+def format_snapshot_message(output: dict, label: str) -> str:
+	"""snapshot output → 텔레그램 메시지 (Lee 표 포맷)."""
+	weights = output.get('params', {}).get('weights', WEIGHTS)
+	threshold = output.get('params', {}).get('threshold', 1.0)
+
+	lines = [
+		f"📊 [semi_trigger {output.get('date')} {label}]",
+		f"({output.get('generated_at', '')})",
+		"",
+		f"가중: us_mem {weights['us_memory']*100:.0f}% / "
+		f"etf {weights['etf_flow']*100:.0f}% / fx {weights['fx']*100:.0f}% / "
+		f"foreign {weights['foreign_flow']*100:.0f}% / nq {weights['nasdaq_futures']*100:.0f}%",
+	]
+
+	for t in output.get('targets', []):
+		fr = t.get('factors_raw', {})
+		fz = t.get('factors_z', {})
+
+		def fmt_raw(v, suffix=''):
+			if v is None:
+				return 'N/A'
+			if suffix == '원':
+				return f"{v:>+18,.0f}원"
+			return f"{v:+.3f}%"
+
+		def fmt_z(v):
+			return f"z={v:+.2f}" if v is not None else "z=N/A"
+
+		semi_score = t.get('semi_score')
+		score_str = f"{semi_score:+.3f}" if semi_score is not None else "N/A"
+		trig = "🎯 TRIGGER" if t.get('trigger') else "⏸️ 미달"
+		base = t.get('baseline_days', 0)
+		base_ok = t.get('baseline_sufficient')
+		base_str = f"{base}일 ✅" if base_ok else f"{base}일 ⚠️부족"
+		legacy = "🟢 ON" if t.get('legacy_trigger') else "⚪ OFF"
+		redistr = " (가중재분배)" if t.get('weight_redistributed') else ""
+
+		lines.extend([
+			"",
+			f"━━ [{t['code']}] {t['name']} (baseline {base_str}) ━━",
+			f"  ① us_memory      {fmt_raw(fr.get('us_memory')):>10s}  {fmt_z(fz.get('us_memory'))}",
+			f"  ② etf_flow       {fmt_raw(fr.get('etf_flow'), '원')}  {fmt_z(fz.get('etf_flow'))}",
+			f"  ③ fx_change      {fmt_raw(fr.get('fx_change')):>10s}  {fmt_z(fz.get('fx'))}",
+			f"  ④ foreign_5d     {fmt_raw(fr.get('foreign_flow_5d'), '원')}  {fmt_z(fz.get('foreign_flow'))}",
+			f"  ⑤ nasdaq_futures {fmt_raw(fr.get('nasdaq_futures')):>10s}  {fmt_z(fz.get('nasdaq_futures'))}",
+			f"  semi_score: {score_str}{redistr}  {trig} (≥{threshold})",
+			f"  legacy(SOX/NVDA/MU 2/3): {legacy}",
+		])
+
+	return "\n".join(lines)
+
+
+async def take_snapshot(token: str, eval_date: str, label: str = 'manual',
+                        db_path: Optional[str] = None,
+                        json_path: Optional[str] = None,
+                        send_telegram: bool = True) -> dict:
+	"""5축 snapshot — DB write + 텔레그램 전송 (Lee 매수 판단용).
+
+	Args:
+		token: 키움 토큰
+		eval_date: YYYY-MM-DD (evening 저장된 가장 최근 일자)
+		label: '02:00' / '05:30' / 'manual' 등 알림 헤더 라벨
+		db_path: DB 경로 override
+		json_path: JSON 출력 경로 override
+		send_telegram: False 시 출력만 (테스트용)
+
+	Returns: morning pipeline output dict
+	"""
+	logger.info(f"[snapshot] label={label} eval_date={eval_date}")
+	output = await run_pipeline_morning(
+		eval_date=eval_date,
+		token=token,
+		mode='snapshot',
+		threshold=1.0,
+		db_path=db_path,
+		json_path=json_path,
+	)
+
+	if send_telegram:
+		from telegram.tel_send import tel_send
+		msg = format_snapshot_message(output, label)
+		try:
+			await tel_send(msg)
+		except Exception:
+			logger.exception("[snapshot] 텔레그램 전송 실패")
+	return output
+
+
+def resolve_eval_date(db_path: Optional[str] = None) -> Optional[str]:
+	"""가장 최근 evening 저장 일자 자동 추출.
+
+	Returns: YYYY-MM-DD or None (DB 비어있음).
+	"""
+	from . import db as st_db
+	from .etf_mapping import TARGET_UNDERLYINGS
+	rows = st_db.fetch_recent_factors(TARGET_UNDERLYINGS[0], n=1, db_path=db_path)
+	return rows[0].get('date') if rows else None
