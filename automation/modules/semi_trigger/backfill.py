@@ -19,33 +19,35 @@ logger = logging.getLogger(__name__)
 
 
 async def fetch_ka10059_year(stk_cd: str, end_dt: str, token: str,
-                              pages: int = 3) -> list:
-	"""ka10059 페이징으로 1년치 외인 일별 매매.
+                              target_days: int = 252,
+                              min_date: str = '20240101') -> list:
+	"""ka10059 dt 분할 호출 — 100일치씩 거슬러 올라가며 ~target_days 수집.
 
-	100일/page × 3페이지 = ≈300일치. cont_yn / next_key 페이징.
+	키움 cont_yn 페이징이 작동 안 함 (next_key 미반환) → dt 파라미터에 옛 날짜를
+	넣으면 그 시점 기준 직전 100일 응답. 가장 오래된 일자 -1일을 다음 dt로 사용.
 
 	Args:
 		stk_cd: 종목코드
 		end_dt: 최신 기준일 YYYYMMDD
 		token: API 토큰
-		pages: 호출 횟수 (기본 3)
+		target_days: 수집 목표 일수
+		min_date: 안전 하한 (이 일자 이전엔 멈춤)
 
-	Returns: [{date: YYYYMMDD, frgnr_invsr: int (천주, 부호유지), close: int (원)}, ...]
-	  date DESC. 종가는 acc_trde_qty 동행 응답에 없으므로 ka10081에서 별도 매핑.
-	  본 함수는 외인 raw qty만 반환 (날짜 + frgnr_qty).
+	Returns: [{date: YYYYMMDD, frgnr_invsr: int (천주, 부호유지)}, ...]  date DESC
 	"""
+	from datetime import datetime, timedelta
 	from api.inv_trade_trend import fn_ka10059
-	from modules.semi_trigger.collectors.foreign_flow import _parse_signed
+	from .collectors.foreign_flow import _parse_signed
 
-	all_items = []
-	cont_yn = 'N'
-	next_key = ''
-	for _ in range(pages):
+	seen: dict = {}
+	current_dt = end_dt
+	loops = 0
+	while len(seen) < target_days and loops < 10:
+		loops += 1
 		try:
-			resp = await fn_ka10059(stk_cd, token, end_dt,
-			                       cont_yn=cont_yn, next_key=next_key)
+			resp = await fn_ka10059(stk_cd, token, current_dt)
 		except Exception:
-			logger.exception(f"[backfill] ka10059 페이징 실패 {stk_cd}")
+			logger.exception(f"[backfill] ka10059 dt={current_dt} 호출 실패")
 			break
 		if not isinstance(resp, dict) or resp.get('return_code') != 0:
 			logger.warning(f"[backfill] ka10059 rc={resp.get('return_code') if isinstance(resp, dict) else 'N/A'}")
@@ -53,24 +55,35 @@ async def fetch_ka10059_year(stk_cd: str, end_dt: str, token: str,
 		items = resp.get('stk_invsr_orgn', [])
 		if not items:
 			break
-		all_items.extend(items)
-		# 다음 페이지
-		cont_yn = resp.get('cont-yn', 'N') or 'N'
-		next_key = resp.get('next-key', '') or ''
-		if cont_yn != 'Y':
-			break
 
-	parsed = []
-	for it in all_items:
-		date = str(it.get('dt', '')).strip()
-		if not date:
-			continue
-		parsed.append({
-			'date':    date,
-			'frgnr_invsr': _parse_signed(it.get('frgnr_invsr', '')),
-		})
-	logger.info(f"[backfill] ka10059 {stk_cd} 수집 {len(parsed)}일")
-	return parsed
+		new_count = 0
+		for it in items:
+			date = str(it.get('dt', '')).strip()
+			if not date or date in seen:
+				continue
+			seen[date] = {
+				'date':        date,
+				'frgnr_invsr': _parse_signed(it.get('frgnr_invsr', '')),
+			}
+			new_count += 1
+		if new_count == 0:
+			break  # 더 못 가져옴
+
+		# 가장 오래된 일자 -1일 → 다음 dt
+		oldest = min(seen.keys())
+		try:
+			d = datetime.strptime(oldest, '%Y%m%d') - timedelta(days=1)
+			current_dt = d.strftime('%Y%m%d')
+		except Exception:
+			break
+		if current_dt < min_date:
+			break
+		# rate limit 보호
+		await asyncio.sleep(0.5)
+
+	result = sorted(seen.values(), key=lambda x: x['date'], reverse=True)
+	logger.info(f"[backfill] ka10059 {stk_cd} dt-split 수집 {len(result)}일 (loops={loops})")
+	return result
 
 
 def aggregate_foreign_5d_history(daily_items: list, close_by_date: dict) -> dict:
@@ -152,14 +165,15 @@ async def backfill_factors(end_dt: str, token: str,
 	from .etf_mapping import ETF_TO_UNDERLYING, TARGET_UNDERLYINGS
 	from .collectors.us_memory import calc_us_memory
 	from api.external_index import (
-		fetch_history, US_MEMORY_SYMBOLS, SYM_SOX, SYM_NVDA, SYM_MU, SYM_USDKRW,
+		fetch_history, US_MEMORY_SYMBOLS, SYM_SOX, SYM_NVDA, SYM_MU,
+		SYM_USDKRW, SYM_NQ,
 	)
 	from api.daily_candle import fn_ka10081
 
 	logger.info(f"[backfill] start end_dt={end_dt} target={days_target}일")
 
-	# 1) yfinance 1년치 history — US 메모리 4종 + 보조 3종 + FX
-	yf_symbols = list(US_MEMORY_SYMBOLS) + [SYM_SOX, SYM_NVDA, SYM_USDKRW]
+	# 1) yfinance 1년치 history — US 메모리 4종 + 보조 (SOX/NVDA/MU 포함) + FX + NQ
+	yf_symbols = list(US_MEMORY_SYMBOLS) + [SYM_SOX, SYM_NVDA, SYM_USDKRW, SYM_NQ]
 	yf_results = await asyncio.gather(
 		*[fetch_history(s, period='1y') for s in yf_symbols]
 	)
@@ -180,6 +194,7 @@ async def backfill_factors(end_dt: str, token: str,
 	fx_by_date = yf_history.get(SYM_USDKRW, {})
 	sox_by_date = yf_history.get(SYM_SOX, {})
 	nvda_by_date = yf_history.get(SYM_NVDA, {})
+	nq_by_date = yf_history.get(SYM_NQ, {})
 
 	# 2) ka10081 — 14 ETF + 2 underlying 일봉 (1년치 ~415일 응답 충분)
 	etf_codes = list(ETF_TO_UNDERLYING.keys())
@@ -234,7 +249,7 @@ async def backfill_factors(end_dt: str, token: str,
 				'etf_flow':        etf_map.get(d_yyyymmdd, 0),
 				'fx_change':       fx_by_date.get(d_iso),
 				'foreign_flow_5d': ff_map.get(d_yyyymmdd),
-				'memory_price':    None,  # Phase 4 placeholder
+				'nasdaq_futures':  nq_by_date.get(d_iso),
 				'sox':             sox_by_date.get(d_iso),
 				'nvda':            nvda_by_date.get(d_iso),
 				'mu':              yf_history.get(SYM_MU, {}).get(d_iso),
