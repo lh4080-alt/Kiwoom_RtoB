@@ -107,11 +107,19 @@ async def take_snapshot(token: str, eval_date: str, label: str = 'manual',
 
 
 def resolve_eval_date(db_path: Optional[str] = None) -> Optional[str]:
-	"""가장 최근 evening 저장 일자 자동 추출.
+	"""가장 최근 정상 evening 저장 일자 자동 추출.
 
-	Returns: YYYY-MM-DD or None (DB 비어있음).
+	etf_flow가 None 또는 0 이하인 row는 비정상 (한국장 진행 중 부분 저장 등) → 제외.
+	가장 최근 etf_flow > 0인 일자 반환.
+
+	Returns: YYYY-MM-DD or None.
 	"""
 	from . import db as st_db
 	from .etf_mapping import TARGET_UNDERLYINGS
-	rows = st_db.fetch_recent_factors(TARGET_UNDERLYINGS[0], n=1, db_path=db_path)
+	rows = st_db.fetch_recent_factors(TARGET_UNDERLYINGS[0], n=20, db_path=db_path)
+	for r in rows:
+		ef = r.get('etf_flow')
+		if ef is not None and ef > 0:
+			return r.get('date')
+	# 폴백 — 정상 evening 일자 없으면 가장 최근
 	return rows[0].get('date') if rows else None
