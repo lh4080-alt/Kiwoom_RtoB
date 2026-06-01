@@ -250,12 +250,67 @@ class DailyAnalyzer:
 			cleared_p = await loop.run_in_executor(None, clear_pool)
 			logger.info(f"collection_pool cleared: {cleared_p} entries")
 
+			# semi_trigger 자동 산출 (shadow) — 다음날 08:30 stick_executor가 활용
+			try:
+				await self._run_semi_trigger(today, dt_yyyymmdd)
+			except Exception:
+				logger.exception("[daily_analyzer] semi_trigger 호출 실패")
+
 		except Exception:
 			logger.exception("daily_analyzer 실패")
 			try:
 				await tel_send(f"❌ [ERROR] daily_analyzer 실패 ({datetime.now().strftime('%H:%M:%S')})")
 			except Exception:
 				pass
+
+	async def _run_semi_trigger(self, today_iso: str, today_yyyymmdd: str) -> None:
+		"""16:00 직후 semi_trigger pipeline 자동 산출 (shadow mode).
+
+		oday 종가 + 외인 + 미메모리 + 환율 데이터로 5축 raw 수집 → DB + JSON 저장.
+		다음날 08:30 stick_executor가 daily_semi_trigger.json 읽어 매수 결정에 활용.
+		"""
+		from telegram.tel_send import tel_send
+		try:
+			from modules.semi_trigger.pipeline import run_pipeline
+		except Exception:
+			logger.exception("[semi_trigger] import 실패")
+			return
+
+		token = await self._get_token()
+		if not token:
+			logger.warning("[semi_trigger] 토큰 없음 — 스킵")
+			return
+
+		output = await run_pipeline(eval_date=today_iso, token=token, mode='shadow')
+
+		# 텔레그램 알림 — semi 결과 + legacy 병행 비교
+		lines = [f"🧮 [semi_trigger {today_iso} shadow]"]
+		for t in output.get('targets', []):
+			code = t['code']
+			name = t['name']
+			semi_score = t.get('semi_score')
+			baseline_ok = t.get('baseline_sufficient')
+			trigger = t.get('trigger')
+			legacy = t.get('legacy_trigger')
+			redistr = t.get('weight_redistributed')
+
+			score_str = f"{semi_score:+.3f}" if semi_score is not None else "N/A"
+			base_str = f"{t.get('baseline_days', 0)}일"
+			trig = "🎯" if trigger else "❌"
+			leg = "🟢" if legacy else "⚪"
+			if not baseline_ok:
+				lines.append(
+					f"  {code} {name}: baseline 부족({base_str}) → legacy {leg}"
+				)
+			else:
+				note = " (가중재분배)" if redistr else ""
+				lines.append(
+					f"  {code} {name}: semi {score_str}{note} {trig} / legacy {leg}"
+				)
+		try:
+			await tel_send("\n".join(lines))
+		except Exception:
+			logger.exception("[semi_trigger] 텔레그램 알림 실패")
 
 	async def _get_token(self) -> Optional[str]:
 		"""봇 토큰 매니저 우선, 없으면 fn_au10001 fallback (standalone 테스트)."""

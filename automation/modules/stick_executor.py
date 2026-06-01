@@ -102,6 +102,80 @@ def filter_stick_today(holdings: list, today_iso: str) -> list:
 	]
 
 
+def load_semi_result(eval_date_iso: str = None) -> Optional[dict]:
+	"""daily_semi_trigger.json 로드 (어제 16:00 산출 결과).
+
+	Args:
+		eval_date_iso: 검증할 date (YYYY-MM-DD). None이면 검증 없이 그대로 반환.
+
+	Returns: output dict 또는 None.
+	"""
+	import json as _json
+	import os as _os
+	base = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+	path = _os.path.join(base, 'config', 'data', 'daily_semi_trigger.json')
+	if not _os.path.exists(path):
+		return None
+	try:
+		with open(path, 'r', encoding='utf-8') as f:
+			data = _json.load(f)
+		if eval_date_iso and data.get('date') != eval_date_iso:
+			# 일치 안 하는 stale 데이터
+			return None
+		return data
+	except Exception:
+		return None
+
+
+def get_semi_target_for(stock_code: str) -> Optional[str]:
+	"""stick 종목 → semi 평가 대상 기초종목 코드.
+
+	Returns:
+	  - 005930/000660 직접 → 자기 자신
+	  - ETF (ETF_TO_UNDERLYING) → 매핑된 기초종목
+	  - 외 → None (semi 적용 안 함, stick fallback)
+	"""
+	from .semi_trigger.etf_mapping import ETF_TO_UNDERLYING, TARGET_UNDERLYINGS
+	if stock_code in TARGET_UNDERLYINGS:
+		return stock_code
+	return ETF_TO_UNDERLYING.get(stock_code)
+
+
+def semi_decision_for(stock_code: str, semi_result: Optional[dict]) -> dict:
+	"""특정 stick 종목에 대한 semi 결정.
+
+	Returns: {
+	  'use_semi': bool,           # semi 결과 적용 가능 여부
+	  'target_underlying': str | None,
+	  'baseline_sufficient': bool,
+	  'trigger': bool,            # semi trigger (use_semi=True일 때만 의미)
+	  'semi_score': float | None,
+	}
+
+	use_semi=False면 stick fallback 필요.
+	"""
+	target = get_semi_target_for(stock_code)
+	if target is None or semi_result is None:
+		return {'use_semi': False, 'target_underlying': target,
+		        'baseline_sufficient': False, 'trigger': False, 'semi_score': None}
+	# semi targets에서 찾기
+	target_info = next(
+		(t for t in semi_result.get('targets', []) if t.get('code') == target),
+		None,
+	)
+	if not target_info:
+		return {'use_semi': False, 'target_underlying': target,
+		        'baseline_sufficient': False, 'trigger': False, 'semi_score': None}
+	baseline_ok = bool(target_info.get('baseline_sufficient'))
+	return {
+		'use_semi':            baseline_ok,
+		'target_underlying':   target,
+		'baseline_sufficient': baseline_ok,
+		'trigger':             bool(target_info.get('trigger')),
+		'semi_score':          target_info.get('semi_score'),
+	}
+
+
 def filter_stick_leftover(holdings: list, today_iso: str) -> list:
 	"""봇 시작 시 stick 잔여 검사 — source=stick AND status=filled AND buy_date < today.
 
@@ -270,12 +344,28 @@ class StickExecutor:
 			logger.info("[stick] stick_list 비어있음")
 			return
 
-		added, duplicate = [], []
+		# semi 결과 로드 (어제 16:00 산출 — 오늘 매수 결정 우선)
+		from datetime import date as _date
+		today_iso = _date.today().isoformat()
+		# semi JSON은 어제 종가 기준이라 date != today일 수 있음 — 검증 없이 로드
+		semi_result = load_semi_result(eval_date_iso=None)
+
+		added, duplicate, semi_skipped = [], [], []
+		semi_used_codes = []
 		for it in items:
 			code = it.get('code')
 			qty = int(it.get('qty', 1) or 1)
 			tpr = it.get('tpr')
 			slr = it.get('slr')
+
+			# semi 우선 판단
+			decision = semi_decision_for(code, semi_result)
+			if decision['use_semi']:
+				semi_used_codes.append(code)
+				if not decision['trigger']:
+					semi_skipped.append((code, decision['semi_score']))
+					continue  # semi 매수 안 함
+
 			if await add_to_queue(code, approved_by='stick', qty=qty,
 			                       source='stick', tpr=tpr, slr=slr):
 				added.append((code, qty))
@@ -284,10 +374,16 @@ class StickExecutor:
 
 		queue = await load_queue()
 		lines = [
-			f"✅ [stick 조건 충족] 상승 {eval_result['rising_count']}/3",
+			f"✅ [stick 조건 충족 — stick 룰] 상승 {eval_result['rising_count']}/3",
 			f"  {status_line}",
-			f"stick 매수 대기열 진입: 추가 {len(added)} / 중복 {len(duplicate)}",
+			f"매수 대기열 진입: 추가 {len(added)} / 중복 {len(duplicate)} / semi 스킵 {len(semi_skipped)}",
 		]
+		if semi_used_codes:
+			lines.append(f"📊 semi 우선 적용: {', '.join(semi_used_codes)}")
+		if semi_skipped:
+			lines.append("⏸️ semi trigger 미달: " + ", ".join(
+				f"{c}({s:+.3f})" if s is not None else c for c, s in semi_skipped
+			))
 		if added:
 			lines.append("  • " + ", ".join(f"{c} {q}주" for c, q in added))
 		if duplicate:
