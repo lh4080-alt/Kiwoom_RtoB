@@ -717,6 +717,53 @@ class ChatCommand:
 		await tel_send(f"🗑️ [감시 취소] {c} 제거 — 감시 큐 {len(entries)}건")
 		return True
 
+	async def _cmd_auction(self, args: list) -> bool:
+		"""동시호가 매수 등록 — 다음 거래일 08:30~08:50 시장가 자동 매수.
+
+		사용법: auction <종목코드> [수량]
+		예: auction 005930 5
+
+		Lee 6/2: 필터 없이 시장가 매수 (자동매매 금지·쿨다운만 안전망).
+		갭상승/하락 우회 — 미국 폭등 시 한국 동시호가 진입용.
+		"""
+		from utils.collection_pool import get_stock_name
+		from utils.buy_queue import add_to_queue, load_queue
+
+		if not args:
+			await tel_send("❌ 사용법: auction <종목코드> [수량]\n예: auction 005930 5")
+			return False
+
+		code = str(args[0]).strip()
+		if not code.isdigit() or len(code) != 6:
+			await tel_send(f"❌ 종목코드는 6자리 숫자여야 합니다. (입력: {code})")
+			return False
+
+		qty = 1
+		if len(args) >= 2:
+			try:
+				qty = int(args[1])
+				if qty <= 0:
+					await tel_send("❌ 수량은 1 이상이어야 합니다.")
+					return False
+			except (ValueError, TypeError):
+				await tel_send(f"❌ 수량은 숫자여야 합니다. (입력: {args[1]})")
+				return False
+
+		name = await get_stock_name(code)
+		label = f"{code} {name}" if name else code
+
+		if await add_to_queue(code, approved_by='telegram', qty=qty, source='auction'):
+			queue = await load_queue()
+			await tel_send(
+				f"🔥 [auction 등록] {label} {qty}주\n"
+				f"다음 거래일 08:30~08:50 동시호가 시장가 매수\n"
+				f"📦 매수 대기열 총 {len(queue)}건"
+			)
+			return True
+		else:
+			await tel_send(f"♻️ {label} 이미 매수 대기열에 있음")
+			return False
+
 	async def _cmd_score(self) -> bool:
 		"""semi_trigger 5축 + semi + legacy 즉시 조회 (DB write 포함).
 
@@ -990,6 +1037,9 @@ class ChatCommand:
 				return False
 		elif command == 'score':
 			return await self._cmd_score()
+		elif command.startswith('auction '):
+			parts = text.strip().split()[1:]
+			return await self._cmd_auction(parts)
 		elif command == 'stick_list':
 			return await self._cmd_stick_list()
 		elif command.startswith('stick_cancel '):

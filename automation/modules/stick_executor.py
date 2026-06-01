@@ -29,6 +29,10 @@ CLOSING_AUCTION_FIRST = time(15, 20)
 CLOSING_AUCTION_RETRY = time(15, 25)
 CLOSING_AUCTION_END = time(15, 30)
 
+# 장 시작 동시호가 (Lee 6/2 — auction 명령 처리 윈도우)
+OPEN_AUCTION_START = time(8, 30)
+OPEN_AUCTION_END = time(8, 50)
+
 MIN_RISE_PCT = 0.3                 # 종목별 +0.3% 이상이면 "상승" 카운트
 MIN_RISING_COUNT = 2               # 3종목(SOX/NVDA/MU) 중 N개 이상 상승 시 매수
 MAX_FETCH_RETRIES = 3              # yfinance 실패 시 재시도 횟수
@@ -201,6 +205,7 @@ class StickExecutor:
 		self._sell_attempted_retry: bool = False
 		self._fetch_attempts: int = 0
 		self._last_fetch_attempt_at: Optional[datetime] = None
+		self._auction_attempted_today: bool = False  # 08:30 auction 매수 1회
 
 	def start(self):
 		if self._task is None or self._task.done():
@@ -244,6 +249,7 @@ class StickExecutor:
 		self._sell_attempted_retry = False
 		self._fetch_attempts = 0
 		self._last_fetch_attempt_at = None
+		self._auction_attempted_today = False
 
 	async def _scheduler_loop(self):
 		while True:
@@ -257,7 +263,11 @@ class StickExecutor:
 
 				# 08:30~08:45 pre-market 자동 매수 — Lee 6/2 결정으로 차단됨.
 				# semi 정보는 SnapshotScheduler(02:00/05:30)와 텔레그램 score 명령으로 조회.
-				# 매수는 Lee 수동 pick.
+
+				# 08:30~08:50 동시호가 매수 (auction 명령) — Lee 6/2: 필터 없이 시장가
+				if OPEN_AUCTION_START <= cur_t < OPEN_AUCTION_END and not self._auction_attempted_today:
+					self._auction_attempted_today = True
+					await self._do_auction_buy()
 
 				# 15:20 1차 동시호가 매도 — stick 등록 종목 청산 (유지)
 				if CLOSING_AUCTION_FIRST <= cur_t < CLOSING_AUCTION_RETRY and not self._sell_attempted_first:
@@ -405,6 +415,109 @@ class StickExecutor:
 		lines.append(f"📦 대기열 총 {len(queue)}건 — 09:00 자동 매수 예정")
 		await tel_send("\n".join(lines))
 		logger.info(f"[stick] 매수 대기열 추가: {added}")
+
+	async def _do_auction_buy(self):
+		"""08:30 동시호가 시장가 매수 — auction 명령 등록 종목.
+
+		Lee 6/2 결정: 필터 없이 (자동매매금지·미체결·쿨다운만 안전망).
+		갭상승/하락 + held 차단은 우회 — 미국 폭등 시 의도적 매수.
+		"""
+		from telegram.tel_send import tel_send
+		from utils.buy_queue import load_queue, remove_from_queue
+		from utils.holdings import add_holding, calc_sell_deadline
+		from api.buy_stock import fn_kt10000
+		from utils.blocklist_checker import is_blocked
+		from utils.sold_stocks_manager import is_in_cooldown
+		from utils.get_setting import get_setting
+		from datetime import datetime as _dt, date as _date
+
+		queue = await load_queue()
+		auctions = [q for q in queue if q.get('source') == 'auction']
+		if not auctions:
+			logger.info("[auction] 등록 종목 없음")
+			return
+
+		token = await self.bot.token_manager.get_token()
+		if not token:
+			await tel_send("❌ [auction] 토큰 없음 — 매수 스킵")
+			return
+
+		today = _date.today().isoformat()
+		cooldown_h = get_setting('sell_cooldown_hours', 24)
+		results = []
+		for entry in auctions:
+			code = entry.get('code')
+			qty = int(entry.get('qty', 1) or 1)
+			tpr = entry.get('tpr')
+			slr = entry.get('slr')
+
+			# 최소 안전망 — 자동매매 금지 + 쿨다운만 (Lee 결정)
+			if is_blocked(code):
+				results.append((code, qty, 'blocked', None))
+				continue
+			if is_in_cooldown(code, cooldown_h):
+				results.append((code, qty, 'cooldown', None))
+				continue
+
+			# 시장가 매수 (동시호가 시점)
+			try:
+				rc, ord_no = await fn_kt10000(
+					stk_cd=code, ord_qty=qty, ord_uv=0, token=token,
+					order_type='market', skip_timeout=True,
+				)
+			except Exception as e:
+				logger.exception(f"[auction] {code} 매수 예외")
+				results.append((code, qty, f'exc:{type(e).__name__}', None))
+				continue
+
+			if rc != 0 and rc != '0':
+				results.append((code, qty, f'rc={rc}', None))
+				continue
+
+			# holdings 등록 (실 체결가는 09:05 verify로 갱신)
+			holding = {
+				'code':             code,
+				'buy_price':        0,  # 시장가 — 09:05에 갱신
+				'buy_qty':          qty,
+				'buy_date':         today,
+				'buy_datetime':     _dt.now().isoformat(timespec='seconds'),
+				'ord_no':           str(ord_no) if ord_no else '',
+				'sell_deadline':    calc_sell_deadline(today),
+				'status':           'pending_fill',
+				'source':           'auction',
+			}
+			if tpr is not None:
+				holding['tpr'] = float(tpr)
+			if slr is not None:
+				holding['slr'] = float(slr)
+			await add_holding(holding)
+			await remove_from_queue(code)
+			results.append((code, qty, 'ordered', ord_no))
+
+		# 0B 등록 (성공 종목들)
+		success_codes = [c for c, q, st, on in results if st == 'ordered']
+		if success_codes:
+			try:
+				ws = getattr(self.bot, 'websocket', None)
+				if ws is not None and hasattr(ws, '_queue_reg_request'):
+					await ws._queue_reg_request(success_codes, ['0B'], force_refresh=False)
+			except Exception:
+				logger.exception("[auction] 0B 등록 실패")
+
+		# 텔레그램 알림
+		lines = [f"🔥 [동시호가 시장가 매수] 시도 {len(results)}건"]
+		for c, q, st, on in results:
+			if st == 'ordered':
+				lines.append(f"  ✅ {c} {q}주 (ord_no {on})")
+			elif st == 'blocked':
+				lines.append(f"  ❌ {c} 자동매매 금지")
+			elif st == 'cooldown':
+				lines.append(f"  ❌ {c} 매도 쿨다운 중")
+			else:
+				lines.append(f"  ❌ {c} {st}")
+		lines.append("\n09:05 체결 확인 / 09:30 미체결 취소")
+		await tel_send("\n".join(lines))
+		logger.info(f"[auction] {results}")
 
 	async def _closing_auction_sell(self, retry: bool = False):
 		"""당일 stick 매수 종목 시장가 매도 (15:20 / 15:25 단일가 매매).
