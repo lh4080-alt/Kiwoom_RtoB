@@ -29,6 +29,9 @@ US_MEMORY_SYMBOLS = (SYM_MU, SYM_WDC, SYM_SNDK, SYM_STX)
 # semi_trigger ③ 원/달러 (KRW=X — 1 USD 기준 KRW 시세)
 SYM_USDKRW = 'KRW=X'
 
+# semi_trigger ⑤ 나스닥 선물 (NQ=F — E-mini Nasdaq 100 24h 거래)
+SYM_NQ = 'NQ=F'
+
 
 def _fetch_change_pct_sync(symbol: str) -> Optional[float]:
 	"""동기 호출 — yfinance Ticker.fast_info / history fallback.

@@ -44,11 +44,11 @@ def _z_for_date(stock_code: str, eval_date: str, raw_row: dict,
 	baseline_days = len(baseline_rows)
 
 	current_map = {
-		'us_memory':    raw_row.get('us_memory'),
-		'etf_flow':     raw_row.get('etf_flow'),
-		'fx':           raw_row.get('fx_change'),
-		'foreign_flow': raw_row.get('foreign_flow_5d'),
-		'memory_price': raw_row.get('memory_price'),
+		'us_memory':       raw_row.get('us_memory'),
+		'etf_flow':        raw_row.get('etf_flow'),
+		'fx':              raw_row.get('fx_change'),
+		'foreign_flow':    raw_row.get('foreign_flow_5d'),
+		'nasdaq_futures':  raw_row.get('nasdaq_futures'),
 	}
 	z = {}
 	for axis, cur in current_map.items():

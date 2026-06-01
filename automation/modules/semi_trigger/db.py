@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS daily_factors (
 	fx_change REAL,
 	foreign_flow_5d REAL,
 	memory_price REAL,
+	nasdaq_futures REAL,
 	sox REAL,
 	nvda REAL,
 	mu REAL,
@@ -65,12 +66,20 @@ def get_db_path() -> str:
 
 
 def init_db(db_path: Optional[str] = None) -> None:
-	"""DB 파일 + 스키마 초기화. idempotent (CREATE IF NOT EXISTS)."""
+	"""DB 파일 + 스키마 초기화. idempotent (CREATE IF NOT EXISTS).
+
+	기존 DB에 nasdaq_futures 컬럼 없으면 ALTER TABLE로 추가 (호환성).
+	"""
 	global _initialized
 	path = db_path or get_db_path()
 	os.makedirs(os.path.dirname(path), exist_ok=True)
 	with sqlite3.connect(path) as conn:
 		conn.executescript(SCHEMA_SQL)
+		# 기존 DB 마이그레이션 — nasdaq_futures 컬럼 부재 시 추가
+		cur = conn.execute("PRAGMA table_info(daily_factors)")
+		cols = {row[1] for row in cur.fetchall()}
+		if 'nasdaq_futures' not in cols:
+			conn.execute("ALTER TABLE daily_factors ADD COLUMN nasdaq_futures REAL")
 		conn.commit()
 	_initialized = True
 
@@ -95,20 +104,37 @@ def connect(db_path: Optional[str] = None):
 
 def upsert_factors(date: str, stock_code: str, factors: dict,
                    db_path: Optional[str] = None) -> None:
-	"""daily_factors 단건 INSERT OR REPLACE.
+	"""daily_factors 단건 INSERT OR REPLACE (부분 upsert 지원).
 
 	factors keys: us_memory, etf_flow, fx_change, foreign_flow_5d,
-	              memory_price, sox, nvda, mu (모두 optional, None 허용)
+	              memory_price, nasdaq_futures, sox, nvda, mu (모두 optional, None 허용)
+
+	특정 키만 전달하면 나머지는 기존 값 유지 (16:00 evening 부분 저장 후
+	08:30 morning 보완 패턴 지원).
 	"""
-	cols = ('us_memory', 'etf_flow', 'fx_change', 'foreign_flow_5d',
-	        'memory_price', 'sox', 'nvda', 'mu')
-	values = [factors.get(c) for c in cols]
+	all_cols = ('us_memory', 'etf_flow', 'fx_change', 'foreign_flow_5d',
+	            'memory_price', 'nasdaq_futures', 'sox', 'nvda', 'mu')
 	with connect(db_path) as conn:
+		# 기존 row 조회 (부분 upsert)
+		cur = conn.execute(
+			"SELECT * FROM daily_factors WHERE date = ? AND stock_code = ?",
+			(date, stock_code),
+		)
+		row = cur.fetchone()
+		merged = {}
+		for c in all_cols:
+			if c in factors:
+				merged[c] = factors[c]
+			elif row is not None:
+				merged[c] = row[c] if c in row.keys() else None
+			else:
+				merged[c] = None
+		values = [merged[c] for c in all_cols]
 		conn.execute(
 			"INSERT OR REPLACE INTO daily_factors "
 			"(date, stock_code, us_memory, etf_flow, fx_change, foreign_flow_5d, "
-			" memory_price, sox, nvda, mu) "
-			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			" memory_price, nasdaq_futures, sox, nvda, mu) "
+			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			(date, stock_code, *values),
 		)
 		conn.commit()

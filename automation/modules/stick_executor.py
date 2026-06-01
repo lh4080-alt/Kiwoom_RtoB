@@ -278,117 +278,132 @@ class StickExecutor:
 				await asyncio.sleep(60)
 
 	async def _do_pre_market_check(self, now: datetime):
-		"""SOX/NVDA/MU 등락률 조회 → 다수결(3중 2 이상 상승) 시 stick 종목들 buy_queue 추가."""
-		from api.external_index import fetch_semi_trio
+		"""08:30 — semi_trigger morning pipeline (us_mem+fx+NQ 재계산) → 통합 score → 매수 결정.
+
+		Lee 6/2 수정: 기존 stick binary 룰 (SOX+NVDA+MU 2/3) 폐기. semi_score만 사용.
+		"""
 		from telegram.tel_send import tel_send
 		from utils.stick_list import load_stick
 		from utils.buy_queue import add_to_queue, load_queue
+		from .semi_trigger.pipeline import run_pipeline_morning
+		from .semi_trigger import db as st_db
+		from .semi_trigger.etf_mapping import TARGET_UNDERLYINGS
 
 		self._fetch_attempts += 1
 		self._last_fetch_attempt_at = now
-		logger.info(f"[stick] pre-market 체크 시도 {self._fetch_attempts}/{MAX_FETCH_RETRIES}")
+		logger.info(f"[stick] morning 시도 {self._fetch_attempts}/{MAX_FETCH_RETRIES}")
 
-		result = await fetch_semi_trio()
-		sox = result.get('sox')
-		nvda = result.get('nvda')
-		mu = result.get('mu')
+		# 토큰
+		token = None
+		try:
+			token = await self.bot.token_manager.get_token()
+		except Exception:
+			logger.exception("[stick] 토큰 획득 실패")
+		if not token:
+			if self._fetch_attempts >= MAX_FETCH_RETRIES:
+				self._fetched_today = True
+				await tel_send("❌ [stick] 토큰 없음 — 매수 스킵")
+			return
 
-		eval_result = evaluate_pre_market(sox, nvda, mu)
+		# eval_date — daily_factors 가장 최근 row (어제 evening 저장)
+		recent = st_db.fetch_recent_factors(TARGET_UNDERLYINGS[0], n=1)
+		if not recent:
+			self._fetched_today = True
+			await tel_send(
+				"⚠️ [stick] daily_factors 비어있음 — 어제 evening pipeline 실패 추정\n"
+				"→ 오늘 매수 스킵"
+			)
+			return
+		eval_date = recent[0]['date']
 
-		# 3개 모두 fetch 실패 → 재시도 또는 최종 스킵
-		if not eval_result['fetch_ok']:
+		# morning pipeline (us_mem + fx + nq 재계산 + 통합 score)
+		try:
+			output = await run_pipeline_morning(eval_date, token, mode='live')
+		except Exception:
+			logger.exception("[stick] morning pipeline 실패")
 			if self._fetch_attempts >= MAX_FETCH_RETRIES:
 				self._fetched_today = True
 				await tel_send(
-					f"❌ [stick 데이터 실패] yfinance {MAX_FETCH_RETRIES}회 재시도 실패\n"
-					f"SOX={sox} / NVDA={nvda} / MU={mu}\n"
-					f"오늘 stick 매수 스킵"
+					f"❌ [stick] morning pipeline {MAX_FETCH_RETRIES}회 실패 — 매수 스킵"
 				)
-				logger.warning(f"[stick] {MAX_FETCH_RETRIES}회 실패 — 스킵")
-			else:
-				logger.warning(f"[stick] 전체 fetch 실패 — {FETCH_RETRY_GAP_SEC}초 후 재시도")
 			return
-
-		# 평가 결과 표시용 라인
-		def _fmt(name, pct, ok):
-			if pct is None:
-				return f"{name} fetch 실패 ❌"
-			return f"{name} {pct:+.2f}% {'✅' if ok else '❌'}"
-
-		status_line = " / ".join([
-			_fmt('SOX', sox, eval_result['sox_ok']),
-			_fmt('NVDA', nvda, eval_result['nvda_ok']),
-			_fmt('MU', mu, eval_result['mu_ok']),
-		])
 
 		self._fetched_today = True
 
-		if not eval_result['pass']:
-			await tel_send(
-				f"⏸️ [stick 조건 미달] 상승 {eval_result['rising_count']}/3 "
-				f"(기준 {MIN_RISING_COUNT}/3 이상, 각 +{MIN_RISE_PCT}%↑)\n"
-				f"  {status_line}\n"
-				f"→ 오늘 stick 매수 스킵"
-			)
-			logger.info(f"[stick] 조건 미달 ({eval_result['rising_count']}/3): {status_line}")
-			return
-
-		# 조건 충족 — stick 종목들 buy_queue에 추가
+		# 각 stick 종목별 매수 결정
 		items = await load_stick()
-		if not items:
-			await tel_send(
-				f"✅ [stick 조건 충족] 상승 {eval_result['rising_count']}/3\n"
-				f"  {status_line}\n"
-				f"⚠️ 등록된 stick 종목 없음"
+		targets = output.get('targets', [])
+		semi_by_code = {t['code']: t for t in targets}
+
+		# 상태 메시지 (각 종목 raw + score)
+		status_lines = []
+		for t in targets:
+			fr = t.get('factors_raw', {})
+			fz = t.get('factors_z', {})
+			score = t.get('semi_score')
+			base = t.get('baseline_days', 0)
+			base_ok = t.get('baseline_sufficient')
+			trig = t.get('trigger')
+			um = fr.get('us_memory')
+			fx = fr.get('fx_change')
+			nq = fr.get('nasdaq_futures')
+			score_str = f"{score:+.3f}" if score is not None else "N/A"
+			marker = "🎯" if trig else ("⏸️" if base_ok else "⏳baseline")
+			status_lines.append(
+				f"  {t['code']} {t['name']}: semi {score_str} {marker}  "
+				f"(us_mem {um:+.2f}% / fx {fx:+.2f}% / NQ {nq:+.2f}% / baseline {base}일)"
+				if (um is not None and fx is not None and nq is not None)
+				else f"  {t['code']} {t['name']}: semi {score_str} {marker}  (raw 부족)"
 			)
-			logger.info("[stick] stick_list 비어있음")
+
+		if not items:
+			lines = [f"📊 [semi_trigger {eval_date} morning]"]
+			lines.extend(status_lines)
+			lines.append("⚠️ stick 등록 종목 없음 — 매수 안 함")
+			await tel_send("\n".join(lines))
 			return
 
-		# semi 결과 로드 (어제 16:00 산출 — 오늘 매수 결정 우선)
-		from datetime import date as _date
-		today_iso = _date.today().isoformat()
-		# semi JSON은 어제 종가 기준이라 date != today일 수 있음 — 검증 없이 로드
-		semi_result = load_semi_result(eval_date_iso=None)
-
-		added, duplicate, semi_skipped = [], [], []
-		semi_used_codes = []
+		added, skipped, unsupported = [], [], []
 		for it in items:
 			code = it.get('code')
 			qty = int(it.get('qty', 1) or 1)
 			tpr = it.get('tpr')
 			slr = it.get('slr')
 
-			# semi 우선 판단
-			decision = semi_decision_for(code, semi_result)
-			if decision['use_semi']:
-				semi_used_codes.append(code)
-				if not decision['trigger']:
-					semi_skipped.append((code, decision['semi_score']))
-					continue  # semi 매수 안 함
+			target = get_semi_target_for(code)
+			if not target or target not in semi_by_code:
+				unsupported.append(code)
+				continue
+
+			ti = semi_by_code[target]
+			if not ti.get('baseline_sufficient'):
+				skipped.append((code, f"baseline 부족({ti.get('baseline_days', 0)}일)"))
+				continue
+			if not ti.get('trigger'):
+				skipped.append((code, f"semi {ti.get('semi_score'):+.3f} < {DEFAULT_THRESHOLD}"))
+				continue
 
 			if await add_to_queue(code, approved_by='stick', qty=qty,
 			                       source='stick', tpr=tpr, slr=slr):
-				added.append((code, qty))
+				added.append((code, qty, ti.get('semi_score')))
 			else:
-				duplicate.append(code)
+				skipped.append((code, '대기열 중복'))
 
 		queue = await load_queue()
-		lines = [
-			f"✅ [stick 조건 충족 — stick 룰] 상승 {eval_result['rising_count']}/3",
-			f"  {status_line}",
-			f"매수 대기열 진입: 추가 {len(added)} / 중복 {len(duplicate)} / semi 스킵 {len(semi_skipped)}",
-		]
-		if semi_used_codes:
-			lines.append(f"📊 semi 우선 적용: {', '.join(semi_used_codes)}")
-		if semi_skipped:
-			lines.append("⏸️ semi trigger 미달: " + ", ".join(
-				f"{c}({s:+.3f})" if s is not None else c for c, s in semi_skipped
-			))
+		lines = [f"📊 [semi_trigger {eval_date} morning]"]
+		lines.extend(status_lines)
+		lines.append(
+			f"\n매수 대기열: 추가 {len(added)} / 스킵 {len(skipped)} / 미지원 {len(unsupported)}"
+		)
 		if added:
-			lines.append("  • " + ", ".join(f"{c} {q}주" for c, q in added))
-		if duplicate:
-			lines.append(f"  ♻️ 중복: {', '.join(duplicate)}")
-		lines.append(f"📦 매수 대기열 총 {len(queue)}건 — 09:00 자동 매수 예정")
+			lines.append("✅ 매수 진입:")
+			for c, q, s in added:
+				lines.append(f"  • {c} {q}주 (semi {s:+.3f})")
+		if skipped:
+			lines.append("⏸️ 스킵: " + ", ".join(f"{c}({r})" for c, r in skipped))
+		if unsupported:
+			lines.append("⚠️ semi 평가 대상 외: " + ", ".join(unsupported))
+		lines.append(f"📦 대기열 총 {len(queue)}건 — 09:00 자동 매수 예정")
 		await tel_send("\n".join(lines))
 		logger.info(f"[stick] 매수 대기열 추가: {added}")
 

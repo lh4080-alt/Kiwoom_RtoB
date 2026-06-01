@@ -89,18 +89,19 @@ class TestSchema:
 class TestUpsertFactors:
 
 	def test_insert_then_replace(self, tmp_db):
+		"""부분 upsert — 두 번째 호출에서 누락된 키는 기존 값 유지 (6/2 변경)."""
 		from modules.semi_trigger.db import upsert_factors, fetch_recent_factors
 		upsert_factors('2026-06-01', '005930',
 		               {'us_memory': 1.5, 'etf_flow': 100.0}, db_path=tmp_db)
-		# 같은 키 → REPLACE
+		# 부분 update — us_memory 덮어쓰고 mu 추가, etf_flow는 기존 값 유지
 		upsert_factors('2026-06-01', '005930',
 		               {'us_memory': 2.0, 'mu': 3.0}, db_path=tmp_db)
 		rows = fetch_recent_factors('005930', n=10, db_path=tmp_db)
 		assert len(rows) == 1
 		assert rows[0]['us_memory'] == 2.0
 		assert rows[0]['mu'] == 3.0
-		# etf_flow는 두 번째 upsert에서 누락 → NULL
-		assert rows[0]['etf_flow'] is None
+		# etf_flow는 기존 값 유지 (병합)
+		assert rows[0]['etf_flow'] == 100.0
 
 	def test_fetch_recent_order(self, tmp_db):
 		from modules.semi_trigger.db import upsert_factors, fetch_recent_factors

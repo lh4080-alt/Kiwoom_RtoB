@@ -60,7 +60,7 @@ class TestCalcAxesZscores:
 		from modules.semi_trigger.pipeline import calc_axes_zscores
 		z, days = calc_axes_zscores('2026-06-01', '005930', {
 			'us_memory': 2.0, 'etf_flow': 100.0, 'fx_change': 0.5,
-			'foreign_flow_5d': 1000000, 'memory_price': None,
+			'foreign_flow_5d': 1000000, 'nasdaq_futures': None,
 		}, db_path=tmp_db)
 		assert days == 0
 		# baseline < 2 → 모든 z None
@@ -124,8 +124,8 @@ class TestPipelineIntegration:
 		async def _mock_foreign(stock_code, base_dt, token):
 			return 1_000_000_000 if stock_code == '005930' else 500_000_000
 
-		async def _mock_memory_price():
-			return {'memory_price': None, 'source': None, 'is_carry_forward': False}
+		async def _mock_nasdaq_futures():
+			return {'nasdaq_futures': 0.5, 'symbol': 'NQ=F'}
 
 		async def _mock_fetch_change_pct(symbol):
 			return {'^SOX': 0.0, 'NVDA': -1.0, 'MU': 1.5}.get(symbol, 0.0)
@@ -134,7 +134,7 @@ class TestPipelineIntegration:
 		monkeypatch.setattr(pipeline, 'collect_etf_flows', _mock_etf_flows)
 		monkeypatch.setattr(pipeline, 'collect_fx_change', _mock_fx)
 		monkeypatch.setattr(pipeline, 'collect_foreign_flow_5d', _mock_foreign)
-		monkeypatch.setattr(pipeline, 'collect_memory_price', _mock_memory_price)
+		monkeypatch.setattr(pipeline, 'collect_nasdaq_futures', _mock_nasdaq_futures)
 
 		# fetch_change_pct는 api.external_index 모듈에 있음 — pipeline.py 안에서 import
 		# pipeline 내부에서 import 하므로 sys.modules 패치

@@ -14,13 +14,13 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# 가중치 (확정값, 변경 금지 — spec v3 §1)
+# 가중치 (확정값, 변경 금지 — spec v3 + Lee 6/2 수정)
 WEIGHTS = {
-	'us_memory':    0.40,
-	'etf_flow':     0.20,
-	'fx':           0.20,
-	'foreign_flow': 0.10,
-	'memory_price': 0.10,
+	'us_memory':       0.40,
+	'etf_flow':        0.20,
+	'fx':              0.20,
+	'foreign_flow':    0.10,
+	'nasdaq_futures':  0.10,  # 6/2: memory_price → NQ=F 교체 (08:30 재계산)
 }
 
 # baseline 최소 요구일수

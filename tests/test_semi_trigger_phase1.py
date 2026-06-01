@@ -73,13 +73,14 @@ class TestCalcZscore:
 class TestCalcSemiScore:
 
 	def test_all_axes_present(self):
+		"""6/2 변경: memory_price → nasdaq_futures."""
 		from modules.semi_trigger.scoring import calc_semi_score, WEIGHTS
 		z_values = {
-			'us_memory': 2.0,    # 0.40
-			'etf_flow': 1.5,     # 0.20
-			'fx': 0.5,           # 0.20
-			'foreign_flow': 1.0, # 0.10
-			'memory_price': 0.3, # 0.10
+			'us_memory':       2.0,  # 0.40
+			'etf_flow':        1.5,  # 0.20
+			'fx':              0.5,  # 0.20
+			'foreign_flow':    1.0,  # 0.10
+			'nasdaq_futures':  0.3,  # 0.10
 		}
 		expected = (0.40 * 2.0 + 0.20 * 1.5 + 0.20 * 0.5 + 0.10 * 1.0 + 0.10 * 0.3)
 		r = calc_semi_score(z_values)
@@ -96,31 +97,30 @@ class TestCalcSemiScore:
 		assert r['used_axes'] == []
 
 	def test_redistribution_when_missing_axis(self):
-		"""memory_price (10%) 결측 → 나머지 90% 비례 재분배."""
+		"""nasdaq_futures (10%) 결측 → 나머지 90% 비례 재분배."""
 		from modules.semi_trigger.scoring import calc_semi_score
 		z_values = {
-			'us_memory': 1.0,    # 0.40 / 0.90 = 0.4444
-			'etf_flow': 1.0,     # 0.20 / 0.90 = 0.2222
-			'fx': 1.0,           # 0.20 / 0.90 = 0.2222
-			'foreign_flow': 1.0, # 0.10 / 0.90 = 0.1111
-			'memory_price': None,
+			'us_memory':       1.0,   # 0.40 / 0.90 = 0.4444
+			'etf_flow':        1.0,   # 0.20 / 0.90 = 0.2222
+			'fx':              1.0,   # 0.20 / 0.90 = 0.2222
+			'foreign_flow':    1.0,   # 0.10 / 0.90 = 0.1111
+			'nasdaq_futures':  None,
 		}
 		r = calc_semi_score(z_values)
-		# 모든 z가 1.0이면 가중 정규화 후에도 1.0
 		assert abs(r['semi_score'] - 1.0) < 1e-9
 		assert r['weight_redistributed'] is True
-		assert 'memory_price' not in r['used_axes']
+		assert 'nasdaq_futures' not in r['used_axes']
 		assert len(r['used_axes']) == 4
 
 	def test_only_us_memory(self):
 		"""us_memory만 유효 → 다른 4축 결측 → us_memory에 100% 가중."""
 		from modules.semi_trigger.scoring import calc_semi_score
 		r = calc_semi_score({
-			'us_memory': 2.5,
-			'etf_flow': None, 'fx': None,
-			'foreign_flow': None, 'memory_price': None,
+			'us_memory':      2.5,
+			'etf_flow':       None, 'fx': None,
+			'foreign_flow':   None, 'nasdaq_futures': None,
 		})
-		assert r['semi_score'] == 2.5  # 0.40/0.40 = 1.0
+		assert r['semi_score'] == 2.5
 		assert r['weight_redistributed'] is True
 		assert r['used_axes'] == ['us_memory']
 
