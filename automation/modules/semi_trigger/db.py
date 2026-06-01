@@ -134,14 +134,27 @@ def upsert_score(date: str, stock_code: str, score_row: dict,
 
 
 def fetch_recent_factors(stock_code: str, n: int = 20,
+                         before_date: Optional[str] = None,
                          db_path: Optional[str] = None) -> list:
-	"""최근 N일 factors 조회 (date DESC). z-score baseline 계산용."""
+	"""최근 N일 factors 조회 (date DESC). z-score baseline 계산용.
+
+	Args:
+		before_date: 지정하면 해당 일자보다 과거(<)만 반환 (walk-forward 백테스트용).
+		             None이면 전체 최근 N일.
+	"""
 	with connect(db_path) as conn:
-		cur = conn.execute(
-			"SELECT * FROM daily_factors WHERE stock_code = ? "
-			"ORDER BY date DESC LIMIT ?",
-			(stock_code, n),
-		)
+		if before_date:
+			cur = conn.execute(
+				"SELECT * FROM daily_factors WHERE stock_code = ? AND date < ? "
+				"ORDER BY date DESC LIMIT ?",
+				(stock_code, before_date, n),
+			)
+		else:
+			cur = conn.execute(
+				"SELECT * FROM daily_factors WHERE stock_code = ? "
+				"ORDER BY date DESC LIMIT ?",
+				(stock_code, n),
+			)
 		return [dict(r) for r in cur.fetchall()]
 
 

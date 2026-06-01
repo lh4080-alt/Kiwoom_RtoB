@@ -37,11 +37,10 @@ def _z_for_date(stock_code: str, eval_date: str, raw_row: dict,
 
 	baseline: eval_date 이전 BASELINE_MIN_DAYS+1 일치에서 eval_date 제외.
 	"""
-	recent = st_db.fetch_recent_factors(
-		stock_code, n=BASELINE_MIN_DAYS + 5, db_path=db_path,
+	# 미래 leak 방지 — before_date=eval_date 사용 (그날 자신 제외)
+	baseline_rows = st_db.fetch_recent_factors(
+		stock_code, n=BASELINE_MIN_DAYS + 5, before_date=eval_date, db_path=db_path,
 	)
-	# 미래 leak 방지: eval_date 이전만 사용
-	baseline_rows = [r for r in recent if r.get('date', '') < eval_date]
 	baseline_days = len(baseline_rows)
 
 	current_map = {
