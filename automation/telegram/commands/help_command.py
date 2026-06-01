@@ -12,20 +12,25 @@ USER_GUIDE_MESSAGE = "프로그램 사용법 자세히 보기\nhttps://yalco.not
 # Phase 2 신규 명령 안내 (조건검색 수집 → 16:00 분석 → Lee 검토 → 다음날 09:00 매수 흐름용)
 PHASE2_COMMANDS = """🆕 [Phase 2 명령]
 
-📌 pick — 다음날 1회 매수 후보
-• pick <code> [수량]
-  예: pick 005930 → 1주
-      pick 005930 5 → 5주
-• cancel <code> — pick 취소
+📌 매수 명령
+• pick <code> [수량] — 다음날 09:00:15 지정가 매수
+  예: pick 005930 5 → 5주 (ka10004 호가, 8단계 안전망)
+• auction <code> [수량] — 다음날 08:30~08:50 동시호가 시장가
+  예: auction 005930 5 → 시장가 (필터 없음, 갭상승 우회)
+  ※ 미국 폭등 시 한국 갭상승해도 진입 보장
+• cancel <code> — pick / auction 큐 취소
 
-📌 stick — 매일 반복 매수 (08:30 미국 신호 통과 시)
+📌 semi_trigger 정보 (Lee 매수 판단 도구)
+• score — 5축 + 종목별 4신호 + semi_score 즉시 조회
+  자동 알림: 매일 02:00 + 05:30 KST (미국 정규장 / 마감 후)
+  ※ 매수 결정 도구, 자동 매수 X
+
+📌 stick (Feature 2 손절/익절 종목별 설정)
 • stick <code> [수량] [tpr <n>] [slr <n>]
-  예: stick 000660 1 → 1주, 글로벌 익/손절
-      stick 000660 1 tpr 5 slr 3 → +5% 익절 / -3% 손절
+  예: stick 122630 1 tpr 5 slr 3 → +5% 익절 / -3% 손절
+  ※ 자동 매수 X (6/2 폐기), 15:20 청산만 작동
   ※ tpr/slr 생략 시 글로벌 (기능 2) 값 사용
-  ※ 양수로 입력 (slr는 내부에서 음수 변환)
-• stick_list — 등록 종목 + tpr/slr 확인
-• stick_cancel <code> — 해제
+• stick_list / stick_cancel <code>
 
 📌 운영
 • status — 매수 대기열 / halt / 수집풀
@@ -33,13 +38,18 @@ PHASE2_COMMANDS = """🆕 [Phase 2 명령]
 • holdings_clean <code> — holdings 잔재 청소
 • force_daily — [DEBUG] 16:00 분석 즉시 실행
 
-📊 매수 흐름
-1) 장중 09:00~15:30: 조건검색 매칭 → 수집풀 누적
-2) 16:00 daily_analyzer: 분석 + 알림
-3) Lee 검토 후 pick / stick 등록
-4) 08:30 stick 신호 체크 (SOX + NVDA + MU 중 2/3 ≥ +0.3%)
-5) 09:00 buy_executor 자동 매수
-6) 15:20 stick 종목 동시호가 매도 (당일 청산)"""
+📊 매수 결정 흐름
+1) 전날 16:00: daily_analyzer + semi_trigger evening (etf+foreign DB 저장)
+2) 02:00 KST 자동: semi_trigger 5축 알림 (미국 정규장 중)
+3) 05:30 KST 자동: semi_trigger 5축 알림 (미국 마감 후 — 가장 정확)
+4) Lee 검토 → pick 또는 auction 등록
+5) 08:30~08:50: auction 종목 시장가 매수
+6) 09:00:15~50: pick 종목 지정가 매수 (8단계 안전망)
+7) 09:05 체결 확인 / 09:30 미체결 취소 / 09:35 정합성 검증
+
+📌 자동 매도 (start real 2 필요)
+• Feature 2: tpr/slr 도달 시 시장가 매도 (per-holding override)
+• stick 등록 종목: 15:20/15:25 동시호가 청산 (당일 매수만)"""
 
 async def send_user_guide():
 	"""프로그램 사용법 링크 + Phase 2 명령 안내 전송."""
