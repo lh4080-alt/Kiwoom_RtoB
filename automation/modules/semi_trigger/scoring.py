@@ -105,3 +105,18 @@ def calc_semi_score(z_values: dict) -> dict:
 def is_baseline_sufficient(baseline_days: int) -> bool:
 	"""baseline 충분 여부 (>= 20일)."""
 	return baseline_days >= BASELINE_MIN_DAYS
+
+
+def calc_legacy_trigger(sox, nvda, mu,
+                       threshold: float = 0.3, min_count: int = 2) -> int:
+	"""기존 stick 룰 (SOX/NVDA/MU 2/3 이상 +0.3%↑) 재현 — shadow 병행 비교용.
+
+	None은 "상승 아님"으로 카운트 (보수적).
+
+	Returns: 1 (trigger) / 0.
+	"""
+	count = 0
+	for v in (sox, nvda, mu):
+		if v is not None and v >= threshold:
+			count += 1
+	return 1 if count >= min_count else 0
