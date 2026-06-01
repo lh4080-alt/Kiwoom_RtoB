@@ -20,6 +20,15 @@ SYM_SOX = '^SOX'
 SYM_NVDA = 'NVDA'
 SYM_MU = 'MU'
 
+# semi_trigger ① 미 메모리 4종 (동일가중 평균)
+SYM_WDC = 'WDC'    # Western Digital (HDD + 클라우드)
+SYM_SNDK = 'SNDK'  # SanDisk (NAND 메모리 — 2024년 WDC에서 분사)
+SYM_STX = 'STX'    # Seagate Technology (HDD/스토리지)
+US_MEMORY_SYMBOLS = (SYM_MU, SYM_WDC, SYM_SNDK, SYM_STX)
+
+# semi_trigger ③ 원/달러 (KRW=X — 1 USD 기준 KRW 시세)
+SYM_USDKRW = 'KRW=X'
+
 
 def _fetch_change_pct_sync(symbol: str) -> Optional[float]:
 	"""동기 호출 — yfinance Ticker.fast_info / history fallback.
