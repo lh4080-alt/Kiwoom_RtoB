@@ -156,22 +156,24 @@ async def run_pipeline_morning(eval_date: str, token: str, mode: str = 'shadow',
 
 	targets = []
 	for stock_code in TARGET_UNDERLYINGS:
-		# DB에서 evening 저장된 부분 로드 — 최근 10개 중 eval_date 일치 row
-		existing = st_db.fetch_recent_factors(stock_code, n=10, db_path=db_path)
-		existing_today = next((r for r in existing if r.get('date') == eval_date), None) or {}
-
+		# morning이 update 하는 키만 raw_factors에 포함 — etf/foreign은 evening 저장값 유지
+		# (db.upsert_factors가 부분 upsert로 빠진 키의 기존 값 자동 보존)
 		raw_factors = {
 			'us_memory':       us_mem.get('us_memory'),
 			'fx_change':       fx_r.get('fx_change'),
 			'nasdaq_futures':  nq_r.get('nasdaq_futures'),
-			'etf_flow':        existing_today.get('etf_flow'),
-			'foreign_flow_5d': existing_today.get('foreign_flow_5d'),
 			'sox':             sox,
 			'nvda':            nvda,
 			'mu':              mu,
 		}
 		# DB 업데이트 (08:30 최신값으로 us_mem/fx/nq 덮어쓰기)
 		st_db.upsert_factors(eval_date, stock_code, raw_factors, db_path=db_path)
+
+		# DB에서 통합 row 조회 (evening 키 포함) — z-score / 출력용
+		existing = st_db.fetch_recent_factors(stock_code, n=10, db_path=db_path)
+		merged_row = next((r for r in existing if r.get('date') == eval_date), None) or {}
+		raw_factors['etf_flow']        = merged_row.get('etf_flow')
+		raw_factors['foreign_flow_5d'] = merged_row.get('foreign_flow_5d')
 
 		# z-score + semi_score + trigger
 		z_values, baseline_days = calc_axes_zscores(

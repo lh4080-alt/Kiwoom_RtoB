@@ -123,10 +123,11 @@ def upsert_factors(date: str, stock_code: str, factors: dict,
 		row = cur.fetchone()
 		merged = {}
 		for c in all_cols:
-			if c in factors:
+			# 명시적 non-None만 새 값으로 사용 — None은 기존 값 유지 (안전망)
+			if c in factors and factors[c] is not None:
 				merged[c] = factors[c]
-			elif row is not None:
-				merged[c] = row[c] if c in row.keys() else None
+			elif row is not None and c in row.keys():
+				merged[c] = row[c]
 			else:
 				merged[c] = None
 		values = [merged[c] for c in all_cols]
