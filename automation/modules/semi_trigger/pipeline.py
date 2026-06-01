@@ -156,8 +156,8 @@ async def run_pipeline_morning(eval_date: str, token: str, mode: str = 'shadow',
 
 	targets = []
 	for stock_code in TARGET_UNDERLYINGS:
-		# DB에서 evening 저장된 부분 로드
-		existing = st_db.fetch_recent_factors(stock_code, n=1, db_path=db_path)
+		# DB에서 evening 저장된 부분 로드 — 최근 10개 중 eval_date 일치 row
+		existing = st_db.fetch_recent_factors(stock_code, n=10, db_path=db_path)
 		existing_today = next((r for r in existing if r.get('date') == eval_date), None) or {}
 
 		raw_factors = {
