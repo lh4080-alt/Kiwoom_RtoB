@@ -37,6 +37,8 @@ class TouchExecutor:
 	def __init__(self, bot_ref):
 		self.bot = bot_ref
 		self._task: Optional[asyncio.Task] = None
+		# 즉시 호출(_cmd_touch) + polling이 동시 실행 시 같은 큐 항목 중복 매수 방지
+		self._check_lock = asyncio.Lock()
 
 	def start(self):
 		if self._task is None or self._task.done():
@@ -65,6 +67,13 @@ class TouchExecutor:
 		if not (MARKET_OPEN <= now < CLOSING_AUCTION):
 			return
 
+		# 동시 호출 직렬화 (race로 중복 매수 방지)
+		if self._check_lock.locked():
+			return  # 이미 다른 호출이 처리 중 → 다음 polling 사이클에서 확인
+		async with self._check_lock:
+			await self._check_touches_inner()
+
+	async def _check_touches_inner(self):
 		from telegram.tel_send import tel_send
 		from utils.buy_queue import load_queue, remove_from_queue
 		from utils.holdings import add_holding, calc_sell_deadline
