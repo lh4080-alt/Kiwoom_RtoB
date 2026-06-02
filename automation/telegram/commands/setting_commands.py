@@ -83,6 +83,29 @@ async def gapdown_command(settings_manager, number):
 		await tel_send(f"❌ gapdown 명령어 실행 중 오류: {e}")
 		return False
 
+async def touch_rate_command(settings_manager, number):
+	"""touch_rate 명령어 — touch 매수 반등 임계값 % (예: touch_rate 10)
+
+	트리거 조건: cur >= low + (touch_rate%/100) × (open - low)
+	"""
+	try:
+		pct = float(number)
+		if pct <= 0:
+			await tel_send("❌ touch_rate % 는 0보다 커야 합니다. 예: touch_rate 10")
+			return False
+		if settings_manager.update_setting('touch_rate', pct):
+			await tel_send(f"✅ touch 반등 임계값이 {pct}%로 설정되었습니다")
+			return True
+		else:
+			await tel_send("❌ touch_rate 설정 실패")
+			return False
+	except ValueError:
+		await tel_send("❌ 잘못된 숫자 형식입니다. 예: touch_rate 10")
+		return False
+	except Exception as e:
+		await tel_send(f"❌ touch_rate 명령어 실행 중 오류: {e}")
+		return False
+
 async def brt_command(settings_manager, number):
 	"""brt 명령어를 처리합니다 - buy_ratio 수정 및 buy_mode를 ratio로 설정"""
 	try:

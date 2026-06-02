@@ -318,6 +318,8 @@ class MainApp:
 			self.chat_command.watching_buyer.start()
 			# stick 매일 매수 + 동시호가 매도
 			self.chat_command.stick_executor.start()
+			# touch — 장 중 최저점 반등 시 시장가 매수 (30초 polling)
+			self.chat_command.touch_executor.start()
 			# semi_trigger snapshot 스케줄러 (02:00 / 05:30 KST 자동 + 수동 score 명령)
 			self.chat_command.snapshot_scheduler.start()
 			# 봇 재시작 시 pnl_tracker realized_today 자정 후 리셋

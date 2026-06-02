@@ -22,6 +22,7 @@ from telegram.commands.setting_commands import (
 	slr_command,
 	gapup_command,
 	gapdown_command,
+	touch_rate_command,
 	brt_command,
 	bft_command,
 	bftx_command,
@@ -117,6 +118,10 @@ class ChatCommand:
 		# stick — 매일 08:30 SOX/NQ 체크 후 자동 매수 + 15:20 동시호가 매도
 		from modules.stick_executor import StickExecutor
 		self.stick_executor = StickExecutor(bot_ref=self)
+
+		# touch — 장 중 30초 polling, 최저점 반등 시장가 매수 (cur >= low + touch_rate% × (open-low))
+		from modules.touch_executor import TouchExecutor
+		self.touch_executor = TouchExecutor(bot_ref=self)
 
 		# semi_trigger snapshot 스케줄러 (02:00 + 05:30 KST 자동 + 텔레그램 score 명령)
 		from modules.semi_trigger.scheduler import SnapshotScheduler
@@ -300,6 +305,10 @@ class ChatCommand:
 	async def gapdown(self, number):
 		"""gapdown 명령어 - pick 갭하락 차단 % (예: gapdown 5)"""
 		return await gapdown_command(self.settings_manager, number)
+
+	async def touch_rate(self, number):
+		"""touch_rate 명령어 - touch 반등 임계값 % (예: touch_rate 10)"""
+		return await touch_rate_command(self.settings_manager, number)
 
 	async def brt(self, number):
 		"""brt 명령어를 처리합니다 - buy_ratio 수정"""
@@ -778,6 +787,90 @@ class ChatCommand:
 			await tel_send(f"♻️ {label} 이미 매수 대기열에 있음")
 			return False
 
+	async def _cmd_touch(self, args: list) -> bool:
+		"""touch 명령 — 일중 최저점 반등 매수.
+
+		cur >= low + touch_rate% × (open - low) 시점에 시장가 매수.
+		장 중 09:00 ~ 15:20 30초 polling. 매수 1회 후 큐 제거.
+		"""
+		from utils.collection_pool import get_stock_name
+		from utils.buy_queue import add_to_queue, load_queue
+		from utils.get_setting import get_setting
+
+		if not args:
+			await tel_send("❌ 사용법: touch <종목코드> [수량]\n예: touch 005930 1")
+			return False
+
+		code = str(args[0]).strip()
+		import re as _re
+		if not _re.match(r'^[\dA-Z]{6}$', code.upper()) or len(code) != 6:
+			await tel_send(f"❌ 종목코드는 6자리 (숫자 또는 영문 대문자)여야 합니다. (입력: {code})")
+			return False
+		code = code.upper()
+
+		qty = 1
+		if len(args) >= 2:
+			try:
+				qty = int(args[1])
+				if qty <= 0:
+					await tel_send("❌ 수량은 1 이상이어야 합니다.")
+					return False
+			except (ValueError, TypeError):
+				await tel_send(f"❌ 수량은 숫자여야 합니다. (입력: {args[1]})")
+				return False
+
+		name = await get_stock_name(code)
+		label = f"{code} {name}" if name else code
+		rate = float(get_setting('touch_rate', 10.0))
+
+		if await add_to_queue(code, approved_by='telegram', qty=qty, source='touch'):
+			queue = await load_queue()
+			touch_count = sum(1 for q in queue if q.get('source') == 'touch')
+			await tel_send(
+				f"🎯 [touch 등록] {label} {qty}주\n"
+				f"트리거: 시가-최저점 차이의 {rate}% 이상 반등 시 시장가 매수\n"
+				f"감시 시간: 장 중 09:00 ~ 15:20 (30초 polling)\n"
+				f"📦 touch 대기 {touch_count}건"
+			)
+			return True
+		else:
+			await tel_send(f"♻️ {label} 이미 매수 대기열에 있음")
+			return False
+
+	async def _cmd_touch_list(self) -> bool:
+		"""touch 큐 조회."""
+		from utils.buy_queue import load_queue
+		from utils.collection_pool import get_stock_name
+		from utils.get_setting import get_setting
+
+		queue = await load_queue()
+		touches = [q for q in queue if q.get('source') == 'touch']
+		rate = float(get_setting('touch_rate', 10.0))
+		if not touches:
+			await tel_send(f"📦 touch 대기열 비어있음 (기준 {rate}%)")
+			return True
+		lines = [f"🎯 [touch 대기열] {len(touches)}건 (기준 {rate}%)"]
+		for t in touches:
+			c = t.get('code', '-')
+			q = t.get('qty', 1)
+			name = await get_stock_name(c)
+			lines.append(f"  • {c} {name or ''} {q}주 (등록 {t.get('approved_at','-')})")
+		await tel_send("\n".join(lines))
+		return True
+
+	async def _cmd_touch_cancel(self, code: str) -> bool:
+		"""touch 큐에서 종목 제거."""
+		from utils.buy_queue import load_queue, remove_from_queue
+		c = str(code).strip().upper()
+		queue = await load_queue()
+		target = next((q for q in queue if q.get('code') == c and q.get('source') == 'touch'), None)
+		if not target:
+			await tel_send(f"❌ {c} 는 touch 대기열에 없음")
+			return False
+		await remove_from_queue(c)
+		await tel_send(f"🗑️ [touch 취소] {c}")
+		return True
+
 	async def _cmd_score(self) -> bool:
 		"""semi_trigger 5축 + semi + legacy 즉시 조회 (DB write 포함).
 
@@ -1068,6 +1161,25 @@ class ChatCommand:
 		elif command.startswith('stick '):
 			parts = text.strip().split()[1:]
 			return await self._cmd_stick(parts)
+		elif command == 'touch_list':
+			return await self._cmd_touch_list()
+		elif command.startswith('touch_cancel '):
+			parts = command.split()
+			if len(parts) == 2:
+				return await self._cmd_touch_cancel(parts[1])
+			else:
+				await tel_send("❌ 사용법: touch_cancel <종목코드>")
+				return False
+		elif command.startswith('touch_rate '):
+			parts = command.split()
+			if len(parts) == 2:
+				return await self.touch_rate(parts[1])
+			else:
+				await tel_send("❌ 사용법: touch_rate {%} (예: touch_rate 10)")
+				return False
+		elif command.startswith('touch '):
+			parts = text.strip().split()[1:]
+			return await self._cmd_touch(parts)
 
 		if command == 'start':
 			return await self.start(is_paper_trading=True, feature_numbers=None)

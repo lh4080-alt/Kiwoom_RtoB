@@ -15,7 +15,9 @@ PHASE2_COMMANDS = """🆕 [Phase 2 명령]
 📌 매수
 • pick <code> [수량] — 다음날 09:00:15 지정가 매수
 • auction <code> [수량] — 다음날 08:30~08:50 동시호가 시장가
+• touch <code> [수량] — 장 중 최저점 반등 시 시장가 매수
 • cancel <code> — 큐 취소
+• touch_list / touch_cancel <code>
 
 📌 정보
 • score — semi_trigger 5축 + 4신호 즉시 조회
@@ -43,7 +45,11 @@ PHASE2_COMMANDS = """🆕 [Phase 2 명령]
 📌 pick 갭 차단 임계값 (% 단위)
 • gapup <n> — 갭상승 차단 % (기본 5)
 • gapdown <n> — 갭하락 차단 % (기본 3)
-  예: gapup 7 → 시초가/전일종가 ≥ 1.07 이면 차단"""
+  예: gapup 7 → 시초가/전일종가 ≥ 1.07 이면 차단
+
+📌 touch 반등 임계값 (% 단위)
+• touch_rate <n> — 트리거 % (기본 10)
+  예: touch_rate 10 → cur ≥ 저가 + 10%×(시가-저가) 시 매수"""
 
 async def send_user_guide():
 	"""프로그램 사용법 링크 + Phase 2 명령 안내 전송."""
