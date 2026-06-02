@@ -1192,7 +1192,7 @@ class ChatCommand:
 		elif command.startswith('sell '):
 			parts = command.split()
 			if len(parts) == 2:
-				return await self.sell(parts[1])
+				return await self.sell(parts[1].upper())
 			else:
 				await tel_send("❌ 사용법: sell {종목코드} (예: sell 005930)")
 				return False
