@@ -119,9 +119,11 @@ class ChatCommand:
 		from modules.stick_executor import StickExecutor
 		self.stick_executor = StickExecutor(bot_ref=self)
 
-		# touch — 장 중 30초 polling, 최저점 반등 시장가 매수 (cur >= low + touch_rate% × (open-low))
+		# touch — 0B 푸시 + 5분 fallback polling, 최저점 반등 시장가 매수
 		from modules.touch_executor import TouchExecutor
 		self.touch_executor = TouchExecutor(bot_ref=self)
+		# websocket의 0B 핸들러가 touch_executor.on_0b_quote 호출하도록 연결
+		self.websocket.touch_executor = self.touch_executor
 
 		# semi_trigger snapshot 스케줄러 (02:00 + 05:30 KST 자동 + 텔레그램 score 명령)
 		from modules.semi_trigger.scheduler import SnapshotScheduler
@@ -829,11 +831,12 @@ class ChatCommand:
 			await tel_send(
 				f"🎯 [touch 등록] {label} {qty}주\n"
 				f"트리거: 시가-최저점 차이의 {rate}% 이상 반등 시 시장가 매수\n"
-				f"감시 시간: 장 중 09:00 ~ 15:20 (30초 polling)\n"
+				f"감시: 0B 실시간 push (장 중 09:00 ~ 15:20)\n"
 				f"📦 touch 대기 {touch_count}건"
 			)
-			# 장 중 등록이면 다음 30초 사이클 기다리지 않고 즉시 1회 트리거 체크
+			# 0B 등록 + 즉시 1회 트리거 체크 (캐시 채움 겸)
 			import asyncio as _asyncio
+			await self.touch_executor.register_for_touch(code)
 			_asyncio.create_task(self.touch_executor._check_touches())
 			return True
 		else:

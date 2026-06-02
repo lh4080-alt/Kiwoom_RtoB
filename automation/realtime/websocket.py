@@ -1948,7 +1948,8 @@ class UnifiedWebSocket:
 		"""0B (주식체결) 메시지 처리: 현재가 감시 및 매도/매수 판단."""
 		# Phase 2 Step C: 보유 종목 손절 모니터링은 features 활성화와 무관하게 동작
 		holdings_mgr = getattr(self, 'holdings_manager', None)
-		if holdings_mgr is not None:
+		touch_exec = getattr(self, 'touch_executor', None)
+		if holdings_mgr is not None or touch_exec is not None:
 			try:
 				code_raw = response.get('item', '')
 				if isinstance(code_raw, list):
@@ -1961,9 +1962,12 @@ class UnifiedWebSocket:
 					except (ValueError, TypeError):
 						current = 0
 					if current > 0:
-						asyncio.create_task(holdings_mgr.on_0b_quote(code_raw, current))
+						if holdings_mgr is not None:
+							asyncio.create_task(holdings_mgr.on_0b_quote(code_raw, current))
+						if touch_exec is not None:
+							asyncio.create_task(touch_exec.on_0b_quote(code_raw, current))
 			except Exception:
-				logger.exception("holdings_manager dispatch error")
+				logger.exception("0B dispatch error")
 
 		if not (self.feature_2_active or self.feature_5_active or self.feature_6_active):
 			return
