@@ -321,6 +321,27 @@ class TouchExecutor:
 		if cur < trigger:
 			return
 
+		# 5-1 halt 가드 (수동 halt + pnl 일일/주간 한도 자동 halt 단일 플래그)
+		if getattr(self.bot, 'is_halted', False):
+			logger.info(f"[touch] {code} halt 상태 — 진입 보류 (해제 시 재시도)")
+			return
+
+		# 5-2 트리거 시점 중복 재확인 — 등록-체결 시점차 (auction/pick이 늦게 체결 가능)
+		from utils.holdings import load_holdings
+		holdings_now = await load_holdings()
+		if any(h.get('code') == code for h in holdings_now):
+			# 이미 다른 source로 보유 중 → touch 큐 정리하고 종료
+			await remove_from_queue(code, source='touch')
+			self._cache.pop(code, None)
+			await tel_send(f"♻️ [touch 진입 차단] {code} 이미 보유 중 (다른 source). touch 큐 제거.")
+			return
+
+		# 5-2 max_holdings 슬롯 cap (settings.json) — touch가 cap 우회하지 않도록
+		max_h = int(get_setting('max_holdings', 0) or 0)
+		if max_h > 0 and len(holdings_now) >= max_h:
+			logger.info(f"[touch] {code} max_holdings {len(holdings_now)}/{max_h} 도달 — 진입 보류")
+			return
+
 		# 우선순위 4: 체결강도 확인 — 호가 허매수벽 방어
 		# 트리거 충족 시점만 호출 (매 push마다 호출 X — 1초 간격 제한이 자동 throttle 백업)
 		from api.stk_strength import fn_ka10046

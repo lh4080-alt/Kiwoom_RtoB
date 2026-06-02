@@ -825,6 +825,19 @@ class ChatCommand:
 		label = f"{code} {name}" if name else code
 		rate = float(get_setting('touch_rate', 10.0))
 
+		# 5-2 종목 단위 중복 차단 (등록 시점) — source 무관, holdings 또는 buy_queue에 있으면 거부
+		from utils.holdings import load_holdings
+		existing_queue = await load_queue()
+		dup_q = next((q for q in existing_queue if q.get('code') == code), None)
+		if dup_q:
+			await tel_send(f"❌ [touch 등록 차단] {label} 이미 매수 대기열에 있음 (source={dup_q.get('source','?')})")
+			return False
+		holdings = await load_holdings()
+		dup_h = next((h for h in holdings if h.get('code') == code), None)
+		if dup_h:
+			await tel_send(f"❌ [touch 등록 차단] {label} 이미 보유 중 (source={dup_h.get('source','?')}, {dup_h.get('buy_qty','?')}주)")
+			return False
+
 		if await add_to_queue(code, approved_by='telegram', qty=qty, source='touch'):
 			queue = await load_queue()
 			touch_count = sum(1 for q in queue if q.get('source') == 'touch')
