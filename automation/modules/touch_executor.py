@@ -48,10 +48,13 @@ class TouchExecutor:
 
 	def start(self):
 		if self._task is None or self._task.done():
+			# trade_log SQLite 초기화 (MAE/MFE 분석용)
+			from utils.touch_trade_log import init_db
+			asyncio.create_task(init_db())
 			self._task = asyncio.create_task(self._scheduler_loop())
 			# 봇 시작 시 큐 잔존 touch 종목 0B 등록 (장 시작 전 등록한 종목 보호)
 			asyncio.create_task(self._reregister_queue_on_startup())
-			logger.info("TouchExecutor started (0B push + 5min fallback)")
+			logger.info("TouchExecutor started (0B push + 5min fallback + trade_log SQLite)")
 
 	def stop(self):
 		if self._task and not self._task.done():
@@ -118,10 +121,14 @@ class TouchExecutor:
 		await self._check_exit(code, int(current_price))
 
 	async def _check_exit(self, code: str, current_price: int):
-		"""touch 보유 종목 손절/익절 감시.
+		"""touch 보유 종목 손절/익절 감시 + MAE/MFE 갱신.
 
 		settings: touch_stop_loss_pct (기본 -2.0), touch_take_profit_pct (기본 3.0)
 		"""
+		# trade_log MAE/MFE 갱신 (selling_codes 검사 전 — 매도 직전 push도 기록)
+		from utils.touch_trade_log import update_mae_mfe
+		asyncio.create_task(update_mae_mfe(code, float(current_price)))
+
 		if code in self._selling_codes:
 			return
 		from utils.holdings import load_holdings
@@ -183,6 +190,17 @@ class TouchExecutor:
 			pnl_pct = ((current_price - buy_price) / buy_price * 100.0) if buy_price else 0.0
 			slr = float(get_setting('touch_stop_loss_pct', -2.0))
 			tpr = float(get_setting('touch_take_profit_pct', 3.0))
+			# trade_log update_exit — reason 정규화 (스키마 enum 일치)
+			from utils.touch_trade_log import update_exit
+			reason_normalized = {
+				'touch_stop_loss': 'stop_loss',
+				'touch_take_profit': 'take_profit',
+			}.get(reason, reason)
+			holding_ord_no = str(holding.get('ord_no', ''))
+			asyncio.create_task(update_exit(
+				code=code, ord_no=holding_ord_no,
+				exit_price=float(current_price), exit_reason=reason_normalized,
+			))
 			reason_kr = {
 				'touch_stop_loss': f'touch 손절 ≤ {slr:.1f}%',
 				'touch_take_profit': f'touch 익절 ≥ +{tpr:.1f}%',
@@ -321,6 +339,10 @@ class TouchExecutor:
 		if cur < trigger:
 			return
 
+		# trade_log: 트리거 충족 시점 캡처 (체결 시점과 분리 → 슬리피지 측정)
+		ts_trigger = datetime.now().isoformat(timespec='seconds')
+		initial_low_for_log = float(self._cache[code].get('initial_low', low))
+
 		# 5-1 halt 가드 (수동 halt + pnl 일일/주간 한도 자동 halt 단일 플래그)
 		if getattr(self.bot, 'is_halted', False):
 			logger.info(f"[touch] {code} halt 상태 — 진입 보류 (해제 시 재시도)")
@@ -417,6 +439,30 @@ class TouchExecutor:
 			holding['slr'] = float(slr)
 		await add_holding(holding)
 		await remove_from_queue(code, source='touch')
+
+		# trade_log: 체결 확정 (rc=0 + ord_no 받음). 미체결은 위 rc 체크에서 이미 return.
+		from utils.touch_trade_log import insert_entry
+		ts_entry = datetime.now().isoformat(timespec='seconds')
+		asyncio.create_task(insert_entry(
+			code=code,
+			ord_no=str(ord_no) if ord_no else '',
+			ts_trigger=ts_trigger,
+			ts_entry=ts_entry,
+			entry_price=float(cur),
+			qty=qty,
+			open_prc=float(open_prc),
+			low=float(low),
+			initial_low=initial_low_for_log,
+			drop_pct=float(drop_pct),
+			trigger_price=float(trigger),
+			cntr_str_5min=float(cntr_str_5min),
+			param_touch_rate=float(rate),
+			param_min_drop_pct=float(min_drop),
+			param_min_strength=float(min_strength),
+			param_invalidate_pct=float(get_setting('touch_invalidate_pct', 3.0)),
+			param_stop_loss_pct=float(get_setting('touch_stop_loss_pct', -2.0)),
+			param_take_profit_pct=float(get_setting('touch_take_profit_pct', 3.0)),
+		))
 
 		await tel_send(
 			f"🎯 [touch 매수] {code} {qty}주 (시장가)\n"
