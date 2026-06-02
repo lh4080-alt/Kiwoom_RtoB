@@ -83,6 +83,100 @@ async def gapdown_command(settings_manager, number):
 		await tel_send(f"❌ gapdown 명령어 실행 중 오류: {e}")
 		return False
 
+async def touch_slr_command(settings_manager, number):
+	"""touch 전용 손절 % — 음수 입력 (예: touch_slr -2)"""
+	try:
+		pct = float(number)
+		if pct > 0:
+			pct = -pct  # 양수 입력하면 자동 음수로
+		if settings_manager.update_setting('touch_stop_loss_pct', pct):
+			await tel_send(f"✅ touch 손절선이 {pct}%로 설정되었습니다")
+			return True
+		await tel_send("❌ touch_slr 설정 실패")
+		return False
+	except ValueError:
+		await tel_send("❌ 잘못된 숫자 형식. 예: touch_slr -2")
+		return False
+	except Exception as e:
+		await tel_send(f"❌ touch_slr 오류: {e}")
+		return False
+
+async def touch_tpr_command(settings_manager, number):
+	"""touch 전용 익절 % — 양수 입력 (예: touch_tpr 3)"""
+	try:
+		pct = float(number)
+		if pct <= 0:
+			await tel_send("❌ touch_tpr 은 양수여야 합니다. 예: touch_tpr 3")
+			return False
+		if settings_manager.update_setting('touch_take_profit_pct', pct):
+			await tel_send(f"✅ touch 익절선이 +{pct}%로 설정되었습니다")
+			return True
+		await tel_send("❌ touch_tpr 설정 실패")
+		return False
+	except ValueError:
+		await tel_send("❌ 잘못된 숫자 형식. 예: touch_tpr 3")
+		return False
+	except Exception as e:
+		await tel_send(f"❌ touch_tpr 오류: {e}")
+		return False
+
+async def touch_drop_command(settings_manager, number):
+	"""touch 최소 하락폭 % (조건3) — 양수 (예: touch_drop 5)"""
+	try:
+		pct = float(number)
+		if pct <= 0:
+			await tel_send("❌ touch_drop 은 양수여야 합니다. 예: touch_drop 5")
+			return False
+		if settings_manager.update_setting('touch_min_drop_pct', pct):
+			await tel_send(f"✅ touch 최소 하락폭이 {pct}%로 설정되었습니다 (시가 대비)")
+			return True
+		await tel_send("❌ touch_drop 설정 실패")
+		return False
+	except ValueError:
+		await tel_send("❌ 잘못된 숫자 형식. 예: touch_drop 5")
+		return False
+	except Exception as e:
+		await tel_send(f"❌ touch_drop 오류: {e}")
+		return False
+
+async def touch_inval_command(settings_manager, number):
+	"""touch 무효화 % — initial_low 대비 추가 하락 (예: touch_inval 3)"""
+	try:
+		pct = float(number)
+		if pct <= 0:
+			await tel_send("❌ touch_inval 은 양수여야 합니다. 예: touch_inval 3")
+			return False
+		if settings_manager.update_setting('touch_invalidate_pct', pct):
+			await tel_send(f"✅ touch 무효화 임계값이 {pct}%로 설정되었습니다 (initial_low 대비 추가 하락)")
+			return True
+		await tel_send("❌ touch_inval 설정 실패")
+		return False
+	except ValueError:
+		await tel_send("❌ 잘못된 숫자 형식. 예: touch_inval 3")
+		return False
+	except Exception as e:
+		await tel_send(f"❌ touch_inval 오류: {e}")
+		return False
+
+async def touch_str_command(settings_manager, number):
+	"""touch 최소 체결강도 — 100 이상이 매수 우위 (예: touch_str 100)"""
+	try:
+		val = float(number)
+		if val < 0:
+			await tel_send("❌ touch_str 은 0 이상. 예: touch_str 100")
+			return False
+		if settings_manager.update_setting('touch_min_strength', val):
+			await tel_send(f"✅ touch 최소 체결강도가 {val}로 설정되었습니다 (100=매수 우위)")
+			return True
+		await tel_send("❌ touch_str 설정 실패")
+		return False
+	except ValueError:
+		await tel_send("❌ 잘못된 숫자 형식. 예: touch_str 100")
+		return False
+	except Exception as e:
+		await tel_send(f"❌ touch_str 오류: {e}")
+		return False
+
 async def touch_rate_command(settings_manager, number):
 	"""touch_rate 명령어 — touch 매수 반등 임계값 % (예: touch_rate 10)
 

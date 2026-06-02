@@ -23,6 +23,11 @@ from telegram.commands.setting_commands import (
 	gapup_command,
 	gapdown_command,
 	touch_rate_command,
+	touch_slr_command,
+	touch_tpr_command,
+	touch_drop_command,
+	touch_inval_command,
+	touch_str_command,
 	brt_command,
 	bft_command,
 	bftx_command,
@@ -311,6 +316,21 @@ class ChatCommand:
 	async def touch_rate(self, number):
 		"""touch_rate 명령어 - touch 반등 임계값 % (예: touch_rate 10)"""
 		return await touch_rate_command(self.settings_manager, number)
+
+	async def touch_slr(self, number):
+		return await touch_slr_command(self.settings_manager, number)
+
+	async def touch_tpr(self, number):
+		return await touch_tpr_command(self.settings_manager, number)
+
+	async def touch_drop(self, number):
+		return await touch_drop_command(self.settings_manager, number)
+
+	async def touch_inval(self, number):
+		return await touch_inval_command(self.settings_manager, number)
+
+	async def touch_str(self, number):
+		return await touch_str_command(self.settings_manager, number)
 
 	async def brt(self, number):
 		"""brt 명령어를 처리합니다 - buy_ratio 수정"""
@@ -1259,6 +1279,36 @@ class ChatCommand:
 			else:
 				await tel_send("❌ 사용법: touch_rate {%} (예: touch_rate 10)")
 				return False
+		elif command.startswith('touch_slr '):
+			parts = command.split()
+			if len(parts) == 2:
+				return await self.touch_slr(parts[1])
+			await tel_send("❌ 사용법: touch_slr {%} (예: touch_slr -2)")
+			return False
+		elif command.startswith('touch_tpr '):
+			parts = command.split()
+			if len(parts) == 2:
+				return await self.touch_tpr(parts[1])
+			await tel_send("❌ 사용법: touch_tpr {%} (예: touch_tpr 3)")
+			return False
+		elif command.startswith('touch_drop '):
+			parts = command.split()
+			if len(parts) == 2:
+				return await self.touch_drop(parts[1])
+			await tel_send("❌ 사용법: touch_drop {%} (예: touch_drop 5)")
+			return False
+		elif command.startswith('touch_inval '):
+			parts = command.split()
+			if len(parts) == 2:
+				return await self.touch_inval(parts[1])
+			await tel_send("❌ 사용법: touch_inval {%} (예: touch_inval 3)")
+			return False
+		elif command.startswith('touch_str '):
+			parts = command.split()
+			if len(parts) == 2:
+				return await self.touch_str(parts[1])
+			await tel_send("❌ 사용법: touch_str {값} (예: touch_str 100)")
+			return False
 		elif command.startswith('touch '):
 			parts = text.strip().split()[1:]
 			return await self._cmd_touch(parts)
