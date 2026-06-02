@@ -12,44 +12,33 @@ USER_GUIDE_MESSAGE = "프로그램 사용법 자세히 보기\nhttps://yalco.not
 # Phase 2 신규 명령 안내 (조건검색 수집 → 16:00 분석 → Lee 검토 → 다음날 09:00 매수 흐름용)
 PHASE2_COMMANDS = """🆕 [Phase 2 명령]
 
-📌 매수 명령
+📌 매수
 • pick <code> [수량] — 다음날 09:00:15 지정가 매수
-  예: pick 005930 5 → 5주 (ka10004 호가, 8단계 안전망)
 • auction <code> [수량] — 다음날 08:30~08:50 동시호가 시장가
-  예: auction 005930 5 → 시장가 (필터 없음, 갭상승 우회)
-  ※ 미국 폭등 시 한국 갭상승해도 진입 보장
-• cancel <code> — pick / auction 큐 취소
+• cancel <code> — 큐 취소
 
-📌 semi_trigger 정보 (Lee 매수 판단 도구)
-• score — 5축 + 종목별 4신호 + semi_score 즉시 조회
-  자동 알림: 매일 02:00 + 05:30 KST (미국 정규장 / 마감 후)
-  ※ 매수 결정 도구, 자동 매수 X
+📌 정보
+• score — semi_trigger 5축 + 4신호 즉시 조회
+• status — 매수 대기열 / halt / 수집풀
+※ score 자동 알림: 매일 02:00 + 05:30 KST
 
-📌 stick (Feature 2 손절/익절 종목별 설정)
+📌 stick (Feature 2 손절/익절 + 15:20 청산)
 • stick <code> [수량] [tpr <n>] [slr <n>]
   예: stick 122630 1 tpr 5 slr 3 → +5% 익절 / -3% 손절
-  ※ 자동 매수 X (6/2 폐기), 15:20 청산만 작동
-  ※ tpr/slr 생략 시 글로벌 (기능 2) 값 사용
 • stick_list / stick_cancel <code>
 
-📌 운영
-• status — 매수 대기열 / halt / 수집풀
-• halt / resume — 매수 정지 / 재개
-• holdings_clean <code> — holdings 잔재 청소
-• force_daily — [DEBUG] 16:00 분석 즉시 실행
-
-📊 매수 결정 흐름
-1) 전날 16:00: daily_analyzer + semi_trigger evening (etf+foreign DB 저장)
-2) 02:00 KST 자동: semi_trigger 5축 알림 (미국 정규장 중)
-3) 05:30 KST 자동: semi_trigger 5축 알림 (미국 마감 후 — 가장 정확)
-4) Lee 검토 → pick 또는 auction 등록
-5) 08:30~08:50: auction 종목 시장가 매수
-6) 09:00:15~50: pick 종목 지정가 매수 (8단계 안전망)
-7) 09:05 체결 확인 / 09:30 미체결 취소 / 09:35 정합성 검증
+📌 수동 매도
+• sell <code> — 보유 전체 시장가 매도
+• sellall — 모든 보유 종목 시장가 매도
 
 📌 자동 매도 (start real 2 필요)
-• Feature 2: tpr/slr 도달 시 시장가 매도 (per-holding override)
-• stick 등록 종목: 15:20/15:25 동시호가 청산 (당일 매수만)"""
+• Feature 2: tpr/slr 도달 시 시장가 매도
+• stick / auction 종목: 15:20/15:25 동시호가 청산
+
+📌 운영
+• halt / resume — 매수 정지 / 재개
+• holdings_clean <code> — holdings 잔재 청소
+• force_daily — [DEBUG] 16:00 분석 즉시 실행"""
 
 async def send_user_guide():
 	"""프로그램 사용법 링크 + Phase 2 명령 안내 전송."""
