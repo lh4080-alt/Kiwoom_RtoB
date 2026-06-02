@@ -329,9 +329,9 @@ class UnifiedWebSocket:
 						print('로그인 성공하였습니다.')
 						# 재로그인 중이면 기능 등록은 _relogin_scheduler에서 처리하므로 여기서는 스킵
 						if not self.is_relogging:
-							# 기능 1이 활성화되어 있으면 조건식 등록
+							# 기능 1이 활성화되어 있으면 조건식 등록 (1000 Bye 대비 재시도)
 							if self.feature_1_active:
-								await self._register_conditions()
+								await self._register_conditions_with_retry()
 							# 기능 2 또는 5가 활성화되어 있으면 portfolio 초기화 및 0B 등록
 							if self.feature_2_active or self.feature_5_active:
 								await self._initialize_portfolio()
@@ -795,6 +795,36 @@ class UnifiedWebSocket:
 		if not self.is_relogging:
 			print(f'실시간 검색 항목 등록 완료. 등록된 조건식: {", ".join(all_seqs_list)}')
 
+	async def _register_conditions_with_retry(self, max_retries=3, delay=3.0):
+		"""기능 1 조건식 등록 — 1000 OK Bye 등 일시적 끊김 대비 자동 재시도.
+
+		키움 서버가 새 연결 직후 일시 끊는 케이스 (08:59 재로그인 직후 6/2 발생).
+		실패 시: 연결 끊겼으면 재연결 → delay 후 재시도. 최종 실패면 raise.
+		"""
+		last_exc = None
+		for attempt in range(max_retries):
+			try:
+				await self._register_conditions()
+				if attempt > 0:
+					print(f'✅ 조건식 등록 재시도 성공 (attempt={attempt+1}/{max_retries})')
+				return
+			except Exception as e:
+				last_exc = e
+				print(f'⚠️ 조건식 등록 실패 attempt={attempt+1}/{max_retries}: {type(e).__name__}: {e}')
+				if attempt >= max_retries - 1:
+					break
+				# 연결 끊겼으면 재연결
+				if not self.connected:
+					try:
+						token = self.token or await self.token_manager.get_token()
+						if token:
+							print(f'  재연결 시도 attempt={attempt+1}')
+							await self.connect(token)
+					except Exception as ce:
+						print(f'  재연결 실패: {ce}')
+				await asyncio.sleep(delay)
+		raise last_exc
+
 	async def _clear_all_conditions(self):
 		"""등록된 모든 조건식을 해제합니다."""
 		# 재로그인 중이면 알림 없이 조용히 처리
@@ -1039,10 +1069,10 @@ class UnifiedWebSocket:
 									self.token = new_token
 									print("🔧 강제 토큰 동기화 완료")
 								
-								# 기능 1이 활성화되어 있었으면 조건식 재등록
+								# 기능 1이 활성화되어 있었으면 조건식 재등록 (1000 Bye 대비 재시도)
 								if was_feature_1_active:
 									await asyncio.sleep(1)
-									await self._register_conditions()
+									await self._register_conditions_with_retry()
 								
 								# 기능 2 또는 5가 활성화되어 있으면 portfolio 재초기화 및 0B 재등록
 								if self.feature_2_active or self.feature_5_active:
@@ -1127,7 +1157,7 @@ class UnifiedWebSocket:
 	async def start_feature_1(self):
 		"""기능 1 (조건식 검색) 시작"""
 		self.feature_1_active = True
-		await self._register_conditions()
+		await self._register_conditions_with_retry()
 
 	async def stop_feature_1(self):
 		"""기능 1 (조건식 검색) 중지"""
