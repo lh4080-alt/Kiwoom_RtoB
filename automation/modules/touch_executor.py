@@ -289,10 +289,17 @@ class TouchExecutor:
 			low = cur
 			self._cache[code]['low'] = low
 
-		# 시가 ≤ 저가 = 반등 정의 불가 (아직 저점 안 만들어짐)
+		# 조건1: 시가 ≤ 저가 = 반등 정의 불가 (아직 저점 안 만들어짐)
 		if open_prc <= low:
 			return
 
+		# 조건3: 시가 대비 최소 하락폭 — 데드캣 바운스 전제 (충분히 빠진 종목)
+		drop_pct = (open_prc - low) / open_prc * 100.0
+		min_drop = float(get_setting('touch_min_drop_pct', 5.0))
+		if drop_pct < min_drop:
+			return  # 충분히 안 빠진 종목 — 반등이라기보다 소폭 등락
+
+		# 조건2: 반등 트리거
 		rate = float(get_setting('touch_rate', 10.0))
 		trigger = low + (rate / 100.0) * (open_prc - low)
 		if cur < trigger:

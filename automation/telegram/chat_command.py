@@ -844,23 +844,45 @@ class ChatCommand:
 			return False
 
 	async def _cmd_touch_list(self) -> bool:
-		"""touch 큐 조회."""
+		"""touch 큐 조회 + 종목별 시가/저가/하락폭 + 조건3 충족 여부."""
 		from utils.buy_queue import load_queue
 		from utils.collection_pool import get_stock_name
 		from utils.get_setting import get_setting
+		from api.stock_info import fn_ka10001
 
 		queue = await load_queue()
 		touches = [q for q in queue if q.get('source') == 'touch']
 		rate = float(get_setting('touch_rate', 10.0))
+		min_drop = float(get_setting('touch_min_drop_pct', 5.0))
 		if not touches:
-			await tel_send(f"📦 touch 대기열 비어있음 (기준 {rate}%)")
+			await tel_send(f"📦 touch 대기열 비어있음 (반등 {rate}% / 최소 하락 {min_drop}%)")
 			return True
-		lines = [f"🎯 [touch 대기열] {len(touches)}건 (기준 {rate}%)"]
+
+		lines = [f"🎯 [touch 대기열] {len(touches)}건 (반등 {rate}% / 최소 하락 {min_drop}%)"]
+		token = await self.token_manager.get_token()
 		for t in touches:
 			c = t.get('code', '-')
 			q = t.get('qty', 1)
 			name = await get_stock_name(c)
-			lines.append(f"  • {c} {name or ''} {q}주 (등록 {t.get('approved_at','-')})")
+			# 시가/저가 조회 → 현재 하락폭 + 조건3 충족 여부
+			info_str = ""
+			try:
+				info = await fn_ka10001(c, token=token, silent=True)
+				raw = info.get('raw', {}) if isinstance(info, dict) else {}
+				op_raw = str(raw.get('open_pric', '0')).lstrip('-')
+				lo_raw = str(raw.get('low_pric', '0')).lstrip('-')
+				op = float(op_raw or 0)
+				lo = float(lo_raw or 0)
+				cur = float(info.get('cur_prc') or 0)
+				if op > 0 and lo > 0:
+					drop_pct = (op - lo) / op * 100.0
+					cond3 = "✅" if drop_pct >= min_drop else "❌"
+					trig = lo + (rate / 100.0) * (op - lo) if op > lo else 0
+					arrow = "🟢" if cur >= trig and trig > 0 else "⚪"
+					info_str = f"\n    시={int(op):,} 저={int(lo):,} 현={int(cur):,} 하락폭 {drop_pct:.2f}% {cond3} 트리거 {int(trig):,} {arrow}"
+			except Exception:
+				info_str = "\n    (시세 조회 실패)"
+			lines.append(f"  • {c} {name or ''} {q}주{info_str}")
 		await tel_send("\n".join(lines))
 		return True
 
