@@ -459,18 +459,32 @@ class StickExecutor:
 				results.append((code, qty, 'cooldown', None))
 				continue
 
-			# 시장가 매수 (동시호가 시점)
-			try:
-				rc, ord_no = await fn_kt10000(
-					stk_cd=code, ord_qty=qty, ord_uv=0, token=token,
-					order_type='market', skip_timeout=True,
-				)
-			except Exception as e:
-				logger.exception(f"[auction] {code} 매수 예외")
-				results.append((code, qty, f'exc:{type(e).__name__}', None))
-				continue
+			# 시장가 매수 (동시호가 시점) — rc=3 토큰 에러 시 자동 재발급 후 1회 재시도
+			rc, ord_no = None, None
+			for attempt in range(2):  # 최대 2회 (초회 + 재시도 1)
+				try:
+					rc, ord_no = await fn_kt10000(
+						stk_cd=code, ord_qty=qty, ord_uv=0, token=token,
+						order_type='market', skip_timeout=True,
+					)
+				except Exception as e:
+					logger.exception(f"[auction] {code} 매수 예외 attempt={attempt}")
+					rc = f'exc:{type(e).__name__}'
+					break
+				# rc=3 (토큰 무효) → 강제 재발급 후 재시도
+				if str(rc) == '3' and attempt == 0:
+					logger.warning(f"[auction] {code} rc=3 → 토큰 강제 재발급 후 재시도")
+					try:
+						token = await self.bot.token_manager.get_token(force_refresh=True)
+					except Exception:
+						logger.exception("[auction] 토큰 강제 재발급 실패")
+						break
+					continue
+				break
 
+			# 실패 시에도 buy_queue에서 제거 (그날 1회 시도, 09:00에 재처리 방지)
 			if rc != 0 and rc != '0':
+				await remove_from_queue(code)
 				results.append((code, qty, f'rc={rc}', None))
 				continue
 
