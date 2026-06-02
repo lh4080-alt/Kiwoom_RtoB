@@ -43,6 +43,8 @@ class TouchExecutor:
 		self._check_lock = asyncio.Lock()
 		# 시가/저가 캐시 — {code: {'open': float, 'low': float}}
 		self._cache: dict = {}
+		# 청산 중인 종목 — 중복 매도 방지 (holdings_manager._selling_codes 패턴)
+		self._selling_codes: set = set()
 
 	def start(self):
 		if self._task is None or self._task.done():
@@ -99,15 +101,106 @@ class TouchExecutor:
 			await asyncio.sleep(FALLBACK_POLL_INTERVAL)
 
 	async def on_0b_quote(self, code: str, current_price: float):
-		"""0B push 핸들러 — 호가 변동마다 호출. 트리거 검증."""
+		"""0B push 핸들러 — 호가 변동마다 호출.
+
+		두 역할 분기:
+		  (A) 큐의 touch 항목 진입 트리거 검증 (lock으로 race 방지)
+		  (B) holdings의 source='touch' 보유 종목 손절/익절 감시 (Step1 추가)
+		"""
 		now = datetime.now().time()
 		if not (MARKET_OPEN <= now < CLOSING_AUCTION):
 			return
-		# 동시 호출 직렬화
-		if self._check_lock.locked():
+		# (A) 진입 검증 — 동시 호출 직렬화
+		if not self._check_lock.locked():
+			async with self._check_lock:
+				await self._evaluate_one(code, current_price_hint=current_price)
+		# (B) 청산 검증 — _selling_codes로 중복 매도 방지 (lock 외부)
+		await self._check_exit(code, int(current_price))
+
+	async def _check_exit(self, code: str, current_price: int):
+		"""touch 보유 종목 손절/익절 감시.
+
+		settings: touch_stop_loss_pct (기본 -2.0), touch_take_profit_pct (기본 3.0)
+		"""
+		if code in self._selling_codes:
 			return
-		async with self._check_lock:
-			await self._evaluate_one(code, current_price_hint=current_price)
+		from utils.holdings import load_holdings
+		from utils.get_setting import get_setting
+		try:
+			holdings = await load_holdings()
+			holding = next((h for h in holdings
+			                if h.get('code') == code
+			                and h.get('source') == 'touch'
+			                and h.get('status') == 'filled'), None)
+			if not holding:
+				return
+			buy_price = int(holding.get('buy_price', 0))
+			if buy_price <= 0:
+				return  # 09:05 verify 전 임시값
+			pnl_pct = (current_price - buy_price) / buy_price * 100.0
+			slr = float(get_setting('touch_stop_loss_pct', -2.0))
+			tpr = float(get_setting('touch_take_profit_pct', 3.0))
+			if pnl_pct <= slr:
+				reason = 'touch_stop_loss'
+			elif pnl_pct >= tpr:
+				reason = 'touch_take_profit'
+			else:
+				return
+			self._selling_codes.add(code)
+			try:
+				await self._sell_market(holding, reason, current_price)
+			finally:
+				self._selling_codes.discard(code)
+		except Exception:
+			logger.exception(f"[touch exit] {code} 검증 실패")
+
+	async def _sell_market(self, holding: dict, reason: str, current_price: int):
+		"""시장가 매도 — holdings_manager._sell_market 패턴 차용."""
+		from telegram.tel_send import tel_send
+		from api.sell_stock import fn_kt10001
+		from utils.holdings import remove_holding
+		from utils.pnl_tracker import record_realized
+		from utils.get_setting import get_setting
+
+		code = holding.get('code', '')
+		qty = int(holding.get('buy_qty', 0))
+		buy_price = int(holding.get('buy_price', 0))
+		if not code or qty <= 0:
+			return
+		try:
+			token = await self.bot.token_manager.get_token()
+			rc, ord_no = await fn_kt10001(
+				stk_cd=code, ord_qty=qty, token=token, price=0, order_type='market',
+			)
+			if rc != 0 and rc != '0':
+				logger.warning(f"[touch sell] {code} 매도 실패 rc={rc}")
+				await tel_send(f"❌ [touch 매도 실패] {code} reason={reason} rc={rc}")
+				return
+			removed = await remove_holding(code)
+			pnl_won = (current_price - buy_price) * qty if current_price else 0
+			if removed and pnl_won:
+				await record_realized(pnl_won)
+			pnl_pct = ((current_price - buy_price) / buy_price * 100.0) if buy_price else 0.0
+			slr = float(get_setting('touch_stop_loss_pct', -2.0))
+			tpr = float(get_setting('touch_take_profit_pct', 3.0))
+			reason_kr = {
+				'touch_stop_loss': f'touch 손절 ≤ {slr:.1f}%',
+				'touch_take_profit': f'touch 익절 ≥ +{tpr:.1f}%',
+			}.get(reason, reason)
+			emoji = '🔴' if pnl_won < 0 else '🟢' if pnl_won > 0 else '⚪'
+			await tel_send(
+				f"{emoji} [touch 매도] {code} {qty}주 @ 시장가\n"
+				f"사유: {reason_kr}\n"
+				f"매수 {buy_price:,} → 현재 {current_price:,} ({pnl_pct:+.2f}%, {pnl_won:+,}원)\n"
+				f"주문번호 {ord_no}"
+			)
+			logger.info(f"[touch sell] {code} reason={reason} pnl_pct={pnl_pct:.2f}%")
+		except Exception:
+			logger.exception(f"[touch sell] {code} 실패")
+			try:
+				await tel_send(f"❌ [touch 매도 예외] {code} reason={reason}")
+			except Exception:
+				pass
 
 	async def _check_touches(self):
 		"""Fallback polling 본체 (5분 주기). 큐 전체 검증."""

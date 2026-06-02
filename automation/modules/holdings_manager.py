@@ -72,6 +72,9 @@ class HoldingsManager:
 			                if h.get('code') == code and h.get('status') == 'filled'), None)
 			if not holding:
 				return
+			# touch source는 touch_executor가 자체 손절/익절 (touch_stop_loss_pct / touch_take_profit_pct) 전담
+			if holding.get('source') == 'touch':
+				return
 
 			buy_price = int(holding.get('buy_price', 0))
 			if buy_price <= 0:
