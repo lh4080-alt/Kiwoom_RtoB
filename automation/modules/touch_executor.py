@@ -321,6 +321,36 @@ class TouchExecutor:
 		if cur < trigger:
 			return
 
+		# 우선순위 4: 체결강도 확인 — 호가 허매수벽 방어
+		# 트리거 충족 시점만 호출 (매 push마다 호출 X — 1초 간격 제한이 자동 throttle 백업)
+		from api.stk_strength import fn_ka10046
+		min_strength = float(get_setting('touch_min_strength', 100.0))
+		try:
+			tm = getattr(self.bot, 'token_manager', None)
+			if tm is not None and hasattr(tm, 'call_with_auto_refresh'):
+				data = await tm.call_with_auto_refresh(fn_ka10046, code)
+			else:
+				data = await fn_ka10046(code, token=token)
+			cntr_str_5min = 0.0
+			if data.get('return_code') == 0:
+				items = data.get('cntr_str_tm', [])
+				if items:
+					raw_s = str(items[0].get('cntr_str_5min', '')).strip()
+					if raw_s.startswith('--'):
+						raw_s = '-' + raw_s[2:]
+					elif raw_s.startswith('+'):
+						raw_s = raw_s[1:]
+					try:
+						cntr_str_5min = float(raw_s) if raw_s else 0.0
+					except (ValueError, TypeError):
+						cntr_str_5min = 0.0
+			if cntr_str_5min < min_strength:
+				logger.info(f"[touch] {code} 체결강도 {cntr_str_5min:.0f} < {min_strength} → 진입 보류")
+				return  # 다음 push에서 재검증
+		except Exception:
+			logger.exception(f"[touch] {code} ka10046 실패 — 진입 보류")
+			return
+
 		# 매수 시도 (rc=3 자동 재시도)
 		rc, ord_no = None, None
 		for attempt in range(2):
