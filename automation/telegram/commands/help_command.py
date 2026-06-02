@@ -42,14 +42,16 @@ PHASE2_COMMANDS = """🆕 [Phase 2 명령]
 • holdings_clean <code> — holdings 잔재 청소
 • force_daily — [DEBUG] 16:00 분석 즉시 실행
 
-📌 pick 갭 차단 임계값 (% 단위)
-• gapup <n> — 갭상승 차단 % (기본 5)
-• gapdown <n> — 갭하락 차단 % (기본 3)
-  예: gapup 7 → 시초가/전일종가 ≥ 1.07 이면 차단
+📌 임계값 조절 (% 단위, 즉시 반영)
+• gapup <%> — pick 갭상승 차단 (기본 5)
+• gapdown <%> — pick 갭하락 차단 (기본 3)
+• touch_rate <%> — touch 반등 임계값 (기본 10)
 
-📌 touch 반등 임계값 (% 단위)
-• touch_rate <n> — 트리거 % (기본 10)
-  예: touch_rate 10 → cur ≥ 저가 + 10%×(시가-저가) 시 매수"""
+예시:
+  gapup 7 → 시초가/전일종가 ≥ 1.07 차단
+  touch_rate 10 → 시가-저가 차이의 10% 이상 반등 시 매수
+  touch_rate 5 → 트리거 쉽게 (5%)
+  touch_rate 20 → 트리거 어렵게 (20%)"""
 
 async def send_user_guide():
 	"""프로그램 사용법 링크 + Phase 2 명령 안내 전송."""
