@@ -100,7 +100,7 @@ def filter_stick_today(holdings: list, today_iso: str) -> list:
 	"""
 	return [
 		h for h in holdings
-		if h.get('source') == 'stick'
+		if h.get('source') in ('stick', 'auction')
 		and h.get('buy_date') == today_iso
 		and h.get('status') == 'filled'
 	]
@@ -188,7 +188,7 @@ def filter_stick_leftover(holdings: list, today_iso: str) -> list:
 	"""
 	return [
 		h for h in holdings
-		if h.get('source') == 'stick'
+		if h.get('source') in ('stick', 'auction')
 		and h.get('status') == 'filled'
 		and h.get('buy_date', '') < today_iso
 	]
