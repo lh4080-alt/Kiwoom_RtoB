@@ -832,6 +832,9 @@ class ChatCommand:
 				f"감시 시간: 장 중 09:00 ~ 15:20 (30초 polling)\n"
 				f"📦 touch 대기 {touch_count}건"
 			)
+			# 장 중 등록이면 다음 30초 사이클 기다리지 않고 즉시 1회 트리거 체크
+			import asyncio as _asyncio
+			_asyncio.create_task(self.touch_executor._check_touches())
 			return True
 		else:
 			await tel_send(f"♻️ {label} 이미 매수 대기열에 있음")

@@ -60,6 +60,11 @@ class TouchExecutor:
 			await asyncio.sleep(POLL_INTERVAL)
 
 	async def _check_touches(self):
+		# 장 외에는 즉시 return (등록 명령에서 직접 호출되는 경우 안전망)
+		now = datetime.now().time()
+		if not (MARKET_OPEN <= now < CLOSING_AUCTION):
+			return
+
 		from telegram.tel_send import tel_send
 		from utils.buy_queue import load_queue, remove_from_queue
 		from utils.holdings import add_holding, calc_sell_deadline
