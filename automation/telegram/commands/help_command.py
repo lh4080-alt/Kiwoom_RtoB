@@ -16,7 +16,8 @@ PHASE2_COMMANDS = """🆕 [Phase 2 명령]
 • pick <code> [수량] — 다음날 09:00:15 지정가 매수
 • auction <code> [수량] — 다음날 08:30~08:50 동시호가 시장가
 • touch <code> [수량] — 장 중 최저점 반등 시 시장가 매수
-• cancel <code> — 큐 취소
+• cancel <code> — 큐 전체(모든 source) 취소
+• auction_list / auction_cancel <code>
 • touch_list / touch_cancel <code>
 
 📌 정보

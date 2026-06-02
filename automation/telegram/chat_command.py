@@ -864,6 +864,38 @@ class ChatCommand:
 		await tel_send("\n".join(lines))
 		return True
 
+	async def _cmd_auction_cancel(self, code: str) -> bool:
+		"""auction 큐에서 종목 제거 (touch_cancel과 대칭)."""
+		from utils.buy_queue import load_queue, remove_from_queue
+		c = str(code).strip().upper()
+		queue = await load_queue()
+		target = next((q for q in queue if q.get('code') == c and q.get('source') == 'auction'), None)
+		if not target:
+			await tel_send(f"❌ {c} 는 auction 대기열에 없음")
+			return False
+		await remove_from_queue(c, source='auction')
+		await tel_send(f"🗑️ [auction 취소] {c}")
+		return True
+
+	async def _cmd_auction_list(self) -> bool:
+		"""auction 큐 조회."""
+		from utils.buy_queue import load_queue
+		from utils.collection_pool import get_stock_name
+
+		queue = await load_queue()
+		auctions = [q for q in queue if q.get('source') == 'auction']
+		if not auctions:
+			await tel_send("📦 auction 대기열 비어있음")
+			return True
+		lines = [f"🔥 [auction 대기열] {len(auctions)}건"]
+		for a in auctions:
+			c = a.get('code', '-')
+			q = a.get('qty', 1)
+			name = await get_stock_name(c)
+			lines.append(f"  • {c} {name or ''} {q}주 (등록 {a.get('approved_at','-')})")
+		await tel_send("\n".join(lines))
+		return True
+
 	async def _cmd_touch_cancel(self, code: str) -> bool:
 		"""touch 큐에서 종목 제거."""
 		from utils.buy_queue import load_queue, remove_from_queue
@@ -1152,6 +1184,15 @@ class ChatCommand:
 				return False
 		elif command == 'score':
 			return await self._cmd_score()
+		elif command == 'auction_list':
+			return await self._cmd_auction_list()
+		elif command.startswith('auction_cancel '):
+			parts = command.split()
+			if len(parts) == 2:
+				return await self._cmd_auction_cancel(parts[1])
+			else:
+				await tel_send("❌ 사용법: auction_cancel <종목코드>")
+				return False
 		elif command.startswith('auction '):
 			parts = text.strip().split()[1:]
 			return await self._cmd_auction(parts)
