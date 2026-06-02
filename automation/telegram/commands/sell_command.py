@@ -80,6 +80,28 @@ async def sell_command(token_manager, stk_cd):
 			)
 			
 			if sell_result == 0 or sell_result == '0':
+				# trade_log: source='touch' holdings면 update_exit('manual')
+				try:
+					from utils.holdings import load_holdings
+					from utils.touch_trade_log import update_exit
+					holdings = await load_holdings()
+					touch_h = next((h for h in holdings
+					                if h.get('code') == stock_code_for_api
+					                and h.get('source') == 'touch'), None)
+					if touch_h:
+						# 현재가 = 잔고 평가가격 기반 추정 (best effort)
+						cur_price = float(target_stock.get('cur_prc', 0) or 0)
+						if cur_price <= 0:
+							cur_price = float(target_stock.get('pur_pric', 0) or 0)
+						asyncio.create_task(update_exit(
+							code=stock_code_for_api,
+							ord_no=str(touch_h.get('ord_no', '')),
+							exit_price=cur_price,
+							exit_reason='manual',
+						))
+				except Exception as _e:
+					pass  # trade_log 실패해도 매도는 계속
+
 				# 주문번호가 있는 경우 체결 대기
 				if order_no:
 					# 이벤트 생성 및 등록

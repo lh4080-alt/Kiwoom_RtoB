@@ -2247,16 +2247,28 @@ class UnifiedWebSocket:
 		self.processing_stocks.add(stock_code)
 		
 		try:
+			# touch source 종목은 touch_executor가 전담 — race로 이중 매도 차단
+			try:
+				from utils.holdings import load_holdings
+				_holdings = await load_holdings()
+				_touch_h = next((h for h in _holdings
+				                 if h.get('code') == stock_code and h.get('source') == 'touch'), None)
+				if _touch_h:
+					print(f"{stock_data.get('name', stock_code)} ({stock_code}): source='touch' → touch_executor 위임, Feature 2 스킵")
+					return
+			except Exception:
+				pass  # holdings 조회 실패 시 일반 흐름 진행
+
 			# 그리드 트레이딩 종목 체크 (가장 먼저 확인)
 			if is_in_grid_trading(stock_code):
 				print(f"{stock_data['name']} ({stock_code}): 그리드 트레이딩 중인 종목이므로 자동매도를 건너뜁니다.")
 				return
-			
+
 			# 분할 트레이딩 종목 체크
 			if is_in_wave_trading(stock_code):
 				print(f"{stock_data['name']} ({stock_code}): 분할 트레이딩 중인 종목이므로 자동매도를 건너뜁니다.")
 				return
-			
+
 			# 자동매도 금지 목록 체크
 			if is_blocked(stock_code):
 				print(f"{stock_data['name']} ({stock_code}): 자동매도 금지 목록에 있어 매도를 건너뜁니다.")

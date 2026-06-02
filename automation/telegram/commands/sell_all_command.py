@@ -141,6 +141,26 @@ async def sell_all_command(token_manager):
 					if sell_result == 0:
 						# 매도 주문 접수 완료 (실제 체결 여부는 확인하지 않음)
 						record_sold_stock(stock_code)
+						# trade_log: source='touch' holdings면 update_exit('manual')
+						try:
+							from utils.holdings import load_holdings
+							from utils.touch_trade_log import update_exit
+							holdings = await load_holdings()
+							touch_h = next((h for h in holdings
+							                if h.get('code') == stock_code
+							                and h.get('source') == 'touch'), None)
+							if touch_h:
+								cur_p = float(stock.get('cur_prc', 0) or 0)
+								if cur_p <= 0:
+									cur_p = float(stock.get('pur_pric', 0) or 0)
+								asyncio.create_task(update_exit(
+									code=stock_code,
+									ord_no=str(touch_h.get('ord_no', '')),
+									exit_price=cur_p,
+									exit_reason='manual',
+								))
+						except Exception:
+							pass
 						success_count += 1
 						total_profit_rate += pl_rt
 						total_profit_amount += pl_amt

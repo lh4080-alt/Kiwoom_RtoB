@@ -587,6 +587,18 @@ class StickExecutor:
 							await record_realized(pnl_won)
 						except Exception:
 							logger.exception(f"[stick] {code} pnl 기록 실패")
+					# trade_log: source='touch'였던 종목만 update_exit
+					if h.get('source') == 'touch' and cur_price > 0:
+						try:
+							from utils.touch_trade_log import update_exit
+							import asyncio as _asyncio
+							_asyncio.create_task(update_exit(
+								code=code, ord_no=str(h.get('ord_no', '')),
+								exit_price=float(cur_price),
+								exit_reason='closing_auction_1520',
+							))
+						except Exception:
+							logger.exception(f"[stick] {code} trade_log update_exit 실패")
 					sold.append({
 						'code': code, 'qty': qty,
 						'buy': buy_price, 'sell': cur_price,
