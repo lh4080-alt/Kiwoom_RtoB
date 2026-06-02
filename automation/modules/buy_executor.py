@@ -232,7 +232,7 @@ class BuyExecutor:
 			else:
 				failed.append((code, status or 'unknown'))
 
-		await clear_queue()
+		await clear_queue(source='pick')  # auction/touch 항목 보존
 
 		# 주문 성공 종목들의 0B 실시간 등록 (손절 모니터링용)
 		if success:

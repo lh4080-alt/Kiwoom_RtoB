@@ -867,7 +867,7 @@ class ChatCommand:
 		if not target:
 			await tel_send(f"❌ {c} 는 touch 대기열에 없음")
 			return False
-		await remove_from_queue(c)
+		await remove_from_queue(c, source='touch')
 		await tel_send(f"🗑️ [touch 취소] {c}")
 		return True
 

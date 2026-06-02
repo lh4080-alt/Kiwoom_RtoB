@@ -57,14 +57,15 @@ async def save_queue(queue: list) -> None:
 
 async def add_to_queue(code: str, approved_by: str = 'telegram', qty: int = 1,
                        source: str = 'pick', tpr=None, slr=None) -> bool:
-	"""종목 추가. 중복이면 False.
+	"""종목 추가. (code, source) 키로 중복 체크 — 같은 종목이라도 source 다르면 별도 등록 허용.
 
-	source: 'pick' (수동 + 글로벌 tpr/slr) / 'stick' (자동 + per-holding tpr/slr override)
-	tpr/slr: stick 전용 override (None이면 글로벌 fallback).
+	source: 'pick' (09:00 지정가) / 'auction' (08:30 동시호가 시장가) / 'touch' (장 중 반등 매수)
+	        / 'stick' (자동) — 같은 종목을 여러 source로 동시 감시 가능.
+	tpr/slr: per-holding override (None이면 글로벌 fallback).
 	"""
 	async with _lock:
 		queue = _load_sync()
-		if any(item.get('code') == code for item in queue):
+		if any(item.get('code') == code and item.get('source', 'pick') == source for item in queue):
 			return False
 		entry = {
 			'code': code,
@@ -82,23 +83,41 @@ async def add_to_queue(code: str, approved_by: str = 'telegram', qty: int = 1,
 		return True
 
 
-async def remove_from_queue(code: str) -> bool:
-	"""종목 제거. 없으면 False."""
+async def remove_from_queue(code: str, source: str = None) -> bool:
+	"""종목 제거. 없으면 False.
+
+	source=None: 그 종목 모든 source 항목 제거 (cancel 명령 — 사용자 의도가 보통 그것).
+	source 명시: 해당 source 항목만 제거 (매수 완료/실패 후 정리 — 다른 source 보존).
+	"""
 	async with _lock:
 		queue = _load_sync()
 		before = len(queue)
-		queue = [item for item in queue if item.get('code') != code]
+		if source is None:
+			queue = [item for item in queue if item.get('code') != code]
+		else:
+			queue = [item for item in queue
+			         if not (item.get('code') == code and item.get('source', 'pick') == source)]
 		if len(queue) == before:
 			return False
 		_save_sync(queue)
 		return True
 
 
-async def clear_queue() -> int:
-	"""전체 비우기. 비워진 종목 수 반환."""
+async def clear_queue(source: str = None) -> int:
+	"""큐 비우기. 비워진 항목 수 반환.
+
+	source=None: 전체 비움 (daily_analyzer 16:00 reset 용도).
+	source 명시: 해당 source 항목만 비움 (buy_executor 09:00 pick 처리 후 등 —
+	             다른 source 보존).
+	"""
 	async with _lock:
 		queue = _load_sync()
-		count = len(queue)
-		_save_sync([])
-		logger.info(f"buy_queue cleared: {count} entries")
+		if source is None:
+			count = len(queue)
+			_save_sync([])
+		else:
+			remaining = [item for item in queue if item.get('source', 'pick') != source]
+			count = len(queue) - len(remaining)
+			_save_sync(remaining)
+		logger.info(f"buy_queue cleared: {count} entries (source={source or 'all'})")
 		return count

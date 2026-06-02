@@ -484,7 +484,7 @@ class StickExecutor:
 
 			# 실패 시에도 buy_queue에서 제거 (그날 1회 시도, 09:00에 재처리 방지)
 			if rc != 0 and rc != '0':
-				await remove_from_queue(code)
+				await remove_from_queue(code, source='auction')
 				results.append((code, qty, f'rc={rc}', None))
 				continue
 
@@ -505,7 +505,7 @@ class StickExecutor:
 			if slr is not None:
 				holding['slr'] = float(slr)
 			await add_holding(holding)
-			await remove_from_queue(code)
+			await remove_from_queue(code, source='auction')
 			results.append((code, qty, 'ordered', ord_no))
 
 		# 0B 등록 (성공 종목들)

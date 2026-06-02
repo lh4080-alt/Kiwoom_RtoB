@@ -138,7 +138,7 @@ class TouchExecutor:
 				break
 
 			if rc != 0 and rc != '0':
-				await remove_from_queue(code)
+				await remove_from_queue(code, source='touch')
 				await tel_send(f"❌ [touch] {code} 매수 실패 rc={rc} — 큐 제거")
 				continue
 
@@ -159,7 +159,7 @@ class TouchExecutor:
 			if slr is not None:
 				holding['slr'] = float(slr)
 			await add_holding(holding)
-			await remove_from_queue(code)
+			await remove_from_queue(code, source='touch')
 
 			await tel_send(
 				f"🎯 [touch 매수] {code} {qty}주 (시장가)\n"
