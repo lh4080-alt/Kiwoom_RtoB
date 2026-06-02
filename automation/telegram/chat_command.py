@@ -666,7 +666,7 @@ class ChatCommand:
 	async def _cmd_cancel(self, code: str) -> bool:
 		"""buy_queue에서 특정 종목 제거 (영속화)."""
 		from utils.buy_queue import remove_from_queue, load_queue
-		c = str(code).strip()
+		c = str(code).strip().upper()
 		ok = await remove_from_queue(c)
 		queue = await load_queue()
 		if not ok:
@@ -710,7 +710,7 @@ class ChatCommand:
 	async def _cmd_watching_cancel(self, code: str) -> bool:
 		"""watching 큐에서 특정 종목 제거."""
 		from utils.buy_queue_watching import remove_from_watching, load_watching
-		c = str(code).strip()
+		c = str(code).strip().upper()
 		ok = await remove_from_watching(c)
 		entries = await load_watching()
 		if not ok:
@@ -803,7 +803,7 @@ class ChatCommand:
 		영구 원칙 #30 준수 — 봇 데몬 내부에서만 실행.
 		"""
 		from utils.holdings import remove_holding, load_holdings
-		c = str(code).strip()
+		c = str(code).strip().upper()
 		removed = await remove_holding(c)
 		holdings = await load_holdings()
 		if removed is None:
