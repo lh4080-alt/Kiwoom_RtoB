@@ -2263,11 +2263,15 @@ class UnifiedWebSocket:
 			except Exception as e:
 				print(f"[feature2] holdings.json 갱신 실패 {stock_code}: {e}")
 
-			# 텔레그램 알림
+			# 텔레그램 알림 — name 누락 시 stock_code만 표시 (0193W0 등 ETF)
 			result_emoji = "🔴" if reason == "익절" else "🔵" if reason == "손절" else "🟡"
-			message = f'{result_emoji} {stock_data["name"]} ({stock_code}) {quantity}주 매도 주문 (수익율: {profit_rate:.2f}%) [{reason}]'
-			await tel_send(message)
-			print(message)
+			name = stock_data.get('name') or stock_code
+			try:
+				message = f'{result_emoji} {name} ({stock_code}) {quantity}주 매도 주문 (수익율: {profit_rate:.2f}%) [{reason}]'
+				await tel_send(message)
+				print(message)
+			except Exception as e:
+				print(f"[feature2] {stock_code} 매도 알림 발송 실패: {e}")
 		
 		except Exception as e:
 			print(f"매도 주문 실행 중 오류: {e}")
