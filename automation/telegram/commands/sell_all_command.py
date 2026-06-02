@@ -141,9 +141,9 @@ async def sell_all_command(token_manager):
 					if sell_result == 0:
 						# 매도 주문 접수 완료 (실제 체결 여부는 확인하지 않음)
 						record_sold_stock(stock_code)
-						# trade_log: source='touch' holdings면 update_exit('manual')
+						# 정합성: holdings.json 정리 + trade_log update_exit
 						try:
-							from utils.holdings import load_holdings
+							from utils.holdings import load_holdings, remove_holding
 							from utils.touch_trade_log import update_exit
 							holdings = await load_holdings()
 							touch_h = next((h for h in holdings
@@ -159,6 +159,8 @@ async def sell_all_command(token_manager):
 									exit_price=cur_p,
 									exit_reason='manual',
 								))
+							# source 무관 holdings 제거 (유령 매도 + trade_log 오염 방지)
+							await remove_holding(stock_code)
 						except Exception:
 							pass
 						success_count += 1

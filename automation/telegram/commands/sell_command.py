@@ -80,16 +80,17 @@ async def sell_command(token_manager, stk_cd):
 			)
 			
 			if sell_result == 0 or sell_result == '0':
-				# trade_log: source='touch' holdings면 update_exit('manual')
+				# 정합성: 매도 주문 성공 시 holdings.json에서도 즉시 제거
+				# (안 하면 0B push에서 touch_executor가 유령 손절 시도 + trade_log 오염)
 				try:
-					from utils.holdings import load_holdings
+					from utils.holdings import load_holdings, remove_holding
 					from utils.touch_trade_log import update_exit
 					holdings = await load_holdings()
 					touch_h = next((h for h in holdings
 					                if h.get('code') == stock_code_for_api
 					                and h.get('source') == 'touch'), None)
+					# trade_log: source='touch' holdings면 update_exit('manual') — remove 전에 호출 (ord_no 확보)
 					if touch_h:
-						# 현재가 = 잔고 평가가격 기반 추정 (best effort)
 						cur_price = float(target_stock.get('cur_prc', 0) or 0)
 						if cur_price <= 0:
 							cur_price = float(target_stock.get('pur_pric', 0) or 0)
@@ -99,8 +100,10 @@ async def sell_command(token_manager, stk_cd):
 							exit_price=cur_price,
 							exit_reason='manual',
 						))
-				except Exception as _e:
-					pass  # trade_log 실패해도 매도는 계속
+					# source 무관 holdings 제거 (잔고-봇 정합성)
+					await remove_holding(stock_code_for_api)
+				except Exception:
+					pass  # 정합성 fix 실패해도 매도는 계속
 
 				# 주문번호가 있는 경우 체결 대기
 				if order_no:
