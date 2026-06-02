@@ -20,6 +20,8 @@ from telegram.commands.chart_command import chart_command
 from telegram.commands.setting_commands import (
 	tpr_command,
 	slr_command,
+	gapup_command,
+	gapdown_command,
 	brt_command,
 	bft_command,
 	bftx_command,
@@ -291,6 +293,14 @@ class ChatCommand:
 		"""slr 명령어를 처리합니다 - stop_loss_rate 수정"""
 		return await slr_command(self.settings_manager, number)
 	
+	async def gapup(self, number):
+		"""gapup 명령어 - pick 갭상승 차단 % (예: gapup 7)"""
+		return await gapup_command(self.settings_manager, number)
+
+	async def gapdown(self, number):
+		"""gapdown 명령어 - pick 갭하락 차단 % (예: gapdown 5)"""
+		return await gapdown_command(self.settings_manager, number)
+
 	async def brt(self, number):
 		"""brt 명령어를 처리합니다 - buy_ratio 수정"""
 		return await brt_command(self.settings_manager, number)
@@ -1155,6 +1165,20 @@ class ChatCommand:
 				return await self.slr(parts[1])
 			else:
 				await tel_send("❌ 사용법: slr {숫자} (예: slr -10)")
+				return False
+		elif command.startswith('gapup '):
+			parts = command.split()
+			if len(parts) == 2:
+				return await self.gapup(parts[1])
+			else:
+				await tel_send("❌ 사용법: gapup {%} (예: gapup 7 → 7% 이상 갭상승 차단)")
+				return False
+		elif command.startswith('gapdown '):
+			parts = command.split()
+			if len(parts) == 2:
+				return await self.gapdown(parts[1])
+			else:
+				await tel_send("❌ 사용법: gapdown {%} (예: gapdown 5 → 5% 이상 갭하락 차단)")
 				return False
 		elif command.startswith('brt '):
 			parts = command.split()

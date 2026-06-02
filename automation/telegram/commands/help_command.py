@@ -38,7 +38,12 @@ PHASE2_COMMANDS = """🆕 [Phase 2 명령]
 📌 운영
 • halt / resume — 매수 정지 / 재개
 • holdings_clean <code> — holdings 잔재 청소
-• force_daily — [DEBUG] 16:00 분석 즉시 실행"""
+• force_daily — [DEBUG] 16:00 분석 즉시 실행
+
+📌 pick 갭 차단 임계값 (% 단위)
+• gapup <n> — 갭상승 차단 % (기본 5)
+• gapdown <n> — 갭하락 차단 % (기본 3)
+  예: gapup 7 → 시초가/전일종가 ≥ 1.07 이면 차단"""
 
 async def send_user_guide():
 	"""프로그램 사용법 링크 + Phase 2 명령 안내 전송."""

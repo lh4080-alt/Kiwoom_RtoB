@@ -43,6 +43,46 @@ async def slr_command(settings_manager, number):
 		await tel_send(f"❌ slr 명령어 실행 중 오류: {e}")
 		return False
 
+async def gapup_command(settings_manager, number):
+	"""gapup 명령어 — pick 매수 시 갭상승 차단 % (예: gapup 7 → 7% 이상 차단)"""
+	try:
+		pct = float(number)
+		if pct <= 0:
+			await tel_send("❌ 갭상승 % 는 0보다 커야 합니다. 예: gapup 7")
+			return False
+		if settings_manager.update_setting('gap_up', pct):
+			await tel_send(f"✅ pick 갭상승 차단이 {pct}% 이상으로 설정되었습니다 (시초가/전일종가 ≥ {1+pct/100:.4f})")
+			return True
+		else:
+			await tel_send("❌ gap_up 설정 실패")
+			return False
+	except ValueError:
+		await tel_send("❌ 잘못된 숫자 형식입니다. 예: gapup 7")
+		return False
+	except Exception as e:
+		await tel_send(f"❌ gapup 명령어 실행 중 오류: {e}")
+		return False
+
+async def gapdown_command(settings_manager, number):
+	"""gapdown 명령어 — pick 매수 시 갭하락 차단 % (예: gapdown 5 → 5% 이상 차단)"""
+	try:
+		pct = float(number)
+		if pct <= 0:
+			await tel_send("❌ 갭하락 % 는 0보다 커야 합니다 (양수 입력). 예: gapdown 5")
+			return False
+		if settings_manager.update_setting('gap_down', pct):
+			await tel_send(f"✅ pick 갭하락 차단이 {pct}% 이상으로 설정되었습니다 (시초가/전일종가 ≤ {1-pct/100:.4f})")
+			return True
+		else:
+			await tel_send("❌ gap_down 설정 실패")
+			return False
+	except ValueError:
+		await tel_send("❌ 잘못된 숫자 형식입니다. 예: gapdown 5")
+		return False
+	except Exception as e:
+		await tel_send(f"❌ gapdown 명령어 실행 중 오류: {e}")
+		return False
+
 async def brt_command(settings_manager, number):
 	"""brt 명령어를 처리합니다 - buy_ratio 수정 및 buy_mode를 ratio로 설정"""
 	try:

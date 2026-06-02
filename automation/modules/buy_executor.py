@@ -346,12 +346,16 @@ class BuyExecutor:
 			if bid <= 0:
 				return {'code': code, 'status': 'failed_no_bid', 'prev': int(prev_close)}
 
-			# ── 갭 차단 (우리 보강 유지)
+			# ── 갭 차단 (우리 보강 유지) — settings.json 동적 (gap_up, gap_down %)
+			gap_up_pct = float(get_setting('gap_up', 5.0))
+			gap_down_pct = float(get_setting('gap_down', 3.0))
+			gap_up_limit = 1.0 + gap_up_pct / 100.0
+			gap_down_limit = 1.0 - gap_down_pct / 100.0
 			ratio = bid / prev_close
-			if ratio >= GAP_UP_LIMIT:
+			if ratio >= gap_up_limit:
 				return {'code': code, 'status': 'blocked_gap_up',
 				        'open': bid, 'prev': int(prev_close)}
-			if ratio <= GAP_DOWN_LIMIT:
+			if ratio <= gap_down_limit:
 				return {'code': code, 'status': 'blocked_gap_down',
 				        'open': bid, 'prev': int(prev_close)}
 
