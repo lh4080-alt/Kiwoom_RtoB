@@ -268,7 +268,8 @@ class TouchExecutor:
 			cur_from_api = float(info.get('cur_prc') or 0)
 			if open_prc <= 0 or low <= 0:
 				return  # 시가 아직 형성 안 됨 (장 시작 전 또는 첫 체결 전)
-			self._cache[code] = {'open': open_prc, 'low': low}
+			# initial_low: 최초 저가 — 무효화 판정 분모 (고정, 저가 갱신과 분리)
+			self._cache[code] = {'open': open_prc, 'low': low, 'initial_low': low}
 			cur = cur_from_api if current_price_hint is None else float(current_price_hint)
 		else:
 			open_prc = cache['open']
@@ -284,10 +285,25 @@ class TouchExecutor:
 				if cur <= 0:
 					return
 
-		# 저가 갱신 (push current_price가 캐시 저가보다 낮으면)
+		# 저가 갱신 + 무효화 판정 (push current_price가 캐시 저가보다 낮으면)
 		if cur < low:
 			low = cur
 			self._cache[code]['low'] = low
+			# 무효화: 새 저가가 initial_low 대비 touch_invalidate_pct 이상 추가 하락 → 그날 1회 종료
+			initial_low = float(self._cache[code].get('initial_low', low))
+			if initial_low > 0:
+				extra_drop = (initial_low - low) / initial_low * 100.0
+				invalidate = float(get_setting('touch_invalidate_pct', 3.0))
+				if extra_drop >= invalidate:
+					await remove_from_queue(code, source='touch')
+					self._cache.pop(code, None)
+					await tel_send(
+						f"⚠️ [touch 무효화] {code} 큐 제거\n"
+						f"  최초 저가 {int(initial_low):,} → 추가 하락 {int(low):,} ({extra_drop:.2f}%)\n"
+						f"  기준 touch_invalidate_pct={invalidate}%. 하락 추세 추격 차단."
+					)
+					logger.info(f"[touch invalidate] {code} initial={initial_low} new_low={low} drop={extra_drop:.2f}%")
+					return
 
 		# 조건1: 시가 ≤ 저가 = 반등 정의 불가 (아직 저점 안 만들어짐)
 		if open_prc <= low:
