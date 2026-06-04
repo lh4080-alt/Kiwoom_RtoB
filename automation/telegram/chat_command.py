@@ -1147,7 +1147,9 @@ class ChatCommand:
 		for item in queue:
 			c = item.get('code', '')
 			n = await get_stock_name(c)
-			queue_lines.append(f"  • {c} {n}".rstrip())
+			src = item.get('source', 'pick')
+			qty = item.get('qty', 1)
+			queue_lines.append(f"  • [{src}] {c} {n} {qty}주".rstrip())
 		queue_block = "\n".join(queue_lines) if queue_lines else "  (없음)"
 
 		pool_lines = []
