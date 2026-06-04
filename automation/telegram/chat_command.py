@@ -1154,9 +1154,11 @@ class ChatCommand:
 
 		pool_lines = []
 		if isinstance(pool, dict):
-			for code in pool:
+			for code, entry in pool.items():
 				pn = await get_stock_name(code)
-				pool_lines.append(f"  • {code} {pn}".rstrip())
+				seqs = entry.get('seq_ids', []) if isinstance(entry, dict) else []
+				cond_tag = ",".join(f"C{s}" for s in seqs) if seqs else "-"
+				pool_lines.append(f"  • [{cond_tag}] {code} {pn}".rstrip())
 		pool_block = "\n".join(pool_lines) if pool_lines else "  (없음)"
 
 		msg = (
