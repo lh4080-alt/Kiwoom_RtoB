@@ -21,13 +21,13 @@ ssl._create_default_https_context = ssl._create_unverified_context
 ssl.create_default_context = create_unverified_ssl_context
 
 def _enforce_single_instance():
-	"""봇 단일 인스턴스 보장 — 중복 가동 차단.
+	"""봇 단일 인스턴스 보장 - 중복 가동 차단.
 
 	원인 (6/4 incident): 자동 task `KiwoomRtoB_Bot`이 매일 08:30/부팅 시 발동하는데
 	중복 실행 가드가 없어, 이전 봇(ssh -f 잔재 등)이 살아있으면 2개 동시 가동 →
 	같은 키움 토큰으로 WebSocket 동시 접속 → 1000 Bye 다발 + 알림 중복 + 매수/매도 race.
 
-	동작 (3단계 polyglot — Beelink PATH에 wmic 없을 수 있어 fallback):
+	동작 (3단계 polyglot - Beelink PATH에 wmic 없을 수 있어 fallback):
 	1. PowerShell Get-CimInstance (cmdline 매칭, 봇만 종료, 안전)
 	2. fallback: tasklist로 모든 python.exe PID 추출 후 자기 자신 외 모두 종료
 	   (cmdline 확인 못 함 → 운영기에 봇 외 python 없다고 가정)
@@ -40,7 +40,7 @@ def _enforce_single_instance():
 	pid_file = os.path.join(_base, 'config', 'data', 'bot.pid')
 
 	killed = []
-	# 시도 1: PowerShell Get-CimInstance (cmdline 매칭 가능 — 안전)
+	# 시도 1: PowerShell Get-CimInstance (cmdline 매칭 가능 - 안전)
 	ps_ok = False
 	try:
 		r = subprocess.run(
@@ -109,7 +109,7 @@ def _enforce_single_instance():
 		time.sleep(2)
 		print(f'[startup guard] 중복 봇 종료: PID {killed}')
 	else:
-		print(f'[startup guard] 중복 봇 없음 — my_pid={my_pid}')
+		print(f'[startup guard] 중복 봇 없음 - my_pid={my_pid}')
 
 	try:
 		os.makedirs(os.path.dirname(pid_file), exist_ok=True)
@@ -126,7 +126,7 @@ if __name__ == '__main__':
 	import os
 	import sys
 
-	# 중복 가동 차단 (Lee 6/4 결정) — 자동 task 중복 발동 + ssh -f 잔재 대비
+	# 중복 가동 차단 (Lee 6/4 결정) - 자동 task 중복 발동 + ssh -f 잔재 대비
 	_enforce_single_instance()
 
 	# 봇 logging 설정 (KST 시각 + httpx/httpcore 음소거)
