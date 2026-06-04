@@ -51,17 +51,18 @@ def _enforce_single_instance():
 		)
 		ps_ok = r.returncode == 0
 		for line in (r.stdout or '').splitlines()[1:]:
-			# CSV: "cmdline","pid"
+			# CSV (Select-Object ProcessId,CommandLine 순서): "pid","cmdline"
 			s = line.strip()
-			if not s:
+			if not s or not s.startswith('"'):
 				continue
-			# 분리: 마지막 ","가 cmdline/pid 경계 (cmdline 안에 ", 가능 — strip 후 양 끝 quote 제거)
-			last = s.rfind('","')
-			if last < 0:
+			# 분리: 첫 ","가 pid/cmdline 경계
+			first = s.find('","')
+			if first < 0:
 				continue
-			cmdline = s[1:last]
+			pid_str = s[1:first]
+			cmdline = s[first + 3:].rstrip('"')
 			try:
-				pid = int(s[last + 3:].rstrip('"'))
+				pid = int(pid_str)
 			except ValueError:
 				continue
 			if pid == my_pid:
