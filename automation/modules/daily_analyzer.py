@@ -557,6 +557,26 @@ class DailyAnalyzer:
 		header_lines = [
 			f"📊 [{today} 일일 분석] 매칭 {len(results)}종목 (정상 {len(valid)}, 데이터부족 {len(errors)})",
 		]
+		# 시장 라인 — 상단으로 이동
+		if market:
+			kospi = market.get('kospi_chg_pct')
+			kosdaq = market.get('kosdaq_chg_pct')
+			frgnr_eok = market.get('frgnr_net_eok')   # 시장 전체 외국인 순매수 (억)
+			pension_eok = market.get('pension_net_eok')  # 시장 전체 연기금 순매수 (억)
+			if kospi is not None and kosdaq is not None:
+				market_line = f"📈 [시장] KOSPI {kospi:+.2f}% / KOSDAQ {kosdaq:+.2f}%"
+				extras = []
+				if frgnr_eok is not None:
+					extras.append(f"외인 {frgnr_eok:+,.0f}억")
+				if pension_eok is not None:
+					extras.append(f"연기금 {pension_eok:+,.0f}억")
+				if extras:
+					market_line += f" / {' / '.join(extras)}"
+				header_lines.append(market_line)
+		else:
+			header_lines.append("⚠️ 시장 환경 데이터 수집 실패")
+		# pick 안내 — 상단으로 이동
+		header_lines.append("👉 pick [code1] [code2] ... 로 매수 후보 확정")
 		if pick_count > 0:
 			header_lines.append(f"🎯 엣지 {EDGE_SCORE_PICK_CUT}점 이상 (pick 후보): {pick_count}종목")
 		if frgnr_strong > 0:
@@ -573,17 +593,6 @@ class DailyAnalyzer:
 
 		if errors:
 			lines.append("\n⚠️ 데이터 부족: " + ", ".join(e['code'] for e in errors[:10]))
-
-		if market:
-			kospi = market.get('kospi_chg_pct')
-			kosdaq = market.get('kosdaq_chg_pct')
-			if kospi is not None and kosdaq is not None:
-				lines.append(f"\n📈 [시장] KOSPI {kospi:+.2f}% / KOSDAQ {kosdaq:+.2f}%")
-		else:
-			lines.append("\n⚠️ 시장 환경 데이터 수집 실패")
-
-		# HTML parse_mode 사용 — &lt; &gt; escape (또는 placeholder 변경)
-		lines.append("\n👉 pick [code1] [code2] ... 로 매수 후보 확정")
 
 		# 메시지 분할 (Telegram 4096 한도)
 		messages = []
