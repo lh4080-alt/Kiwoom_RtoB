@@ -39,6 +39,9 @@ PRICE_LOC_STRONG = 80.0          # 종가 위치 80%↑ 진성 양봉
 PRICE_LOC_WEAK = 50.0            # 종가 위치 50% 미만 = 윗꼬리 트랩
 EDGE_SCORE_PICK_CUT = 70         # 70점 이상 next_day_watchlist 자동 적재
 
+# 시장 전체 외인/연기금 순매수 단위 환산 (ka10066 추정 — 금액 백만원 → 억). 보정 시 이 값만 조정.
+MARKET_INVESTOR_AMT_TO_EOK = 1.0 / 100.0
+
 
 # ─────────────────────────────────────────────────────────
 # Module-level helpers
@@ -236,7 +239,7 @@ class DailyAnalyzer:
 						logger.exception(f"종목 분석 실패: {code}")
 						results.append({'code': code, 'error': 'analysis_failed'})
 
-				market = await self._gather_market_info()
+				market = await self._gather_market_info(token, dt_yyyymmdd)
 				messages = self._format_telegram(results, market, today)
 				for msg in messages:
 					# 종목명 라인 굵음+밑줄 (<b><u>) 적용 — HTML parse_mode 필요
@@ -513,20 +516,70 @@ class DailyAnalyzer:
 	# ─────────────────────────────────────────────────────────
 	# 시장 환경 수집
 	# ─────────────────────────────────────────────────────────
-	async def _gather_market_info(self) -> dict:
-		"""KOSPI/KOSDAQ 당일 등락률."""
+	async def _gather_market_info(self, token: Optional[str] = None,
+								  dt_yyyymmdd: Optional[str] = None) -> dict:
+		"""KOSPI/KOSDAQ 당일 등락률 + 시장 전체 외인/연기금 순매수(억).
+
+		외인/연기금은 token/dt가 주어질 때만 시도하며, 실패해도 등락률 라인은 유지.
+		"""
 		from tools.data_loaders import load_market_change
 
 		today = datetime.now().strftime('%Y-%m-%d')
+		out: dict = {}
 		try:
 			kospi_chg, kosdaq_chg = load_market_change(today)
-			return {
-				'kospi_chg_pct': float(kospi_chg),
-				'kosdaq_chg_pct': float(kosdaq_chg),
-			}
+			out['kospi_chg_pct'] = float(kospi_chg)
+			out['kosdaq_chg_pct'] = float(kosdaq_chg)
 		except Exception:
-			logger.exception("시장 환경 수집 실패")
-			return {}
+			logger.exception("시장 환경(등락률) 수집 실패")
+
+		if token and dt_yyyymmdd:
+			try:
+				frgnr_eok, pension_eok = await self._gather_market_investor(token, dt_yyyymmdd)
+				if frgnr_eok is not None:
+					out['frgnr_net_eok'] = frgnr_eok
+				if pension_eok is not None:
+					out['pension_net_eok'] = pension_eok
+			except Exception:
+				logger.exception("시장 외인/연기금 수집 실패")
+
+		return out
+
+	async def _gather_market_investor(self, token: str, dt_yyyymmdd: str):
+		"""시장 전체(KOSPI+KOSDAQ) 외국인/연기금 순매수 합계 (억원).
+
+		ka10066 장마감후투자자별매매 — 응답 스펙 추정. 첫 실전 1회 후
+		로그 [ka10066 raw ...] 확인하여 필드명/단위 보정.
+		반환: (frgnr_net_eok, pension_net_eok) — 미확보 시 (None, None).
+		"""
+		from api.market_investor import fn_ka10066, extract_investor_net
+
+		tm = getattr(self.bot, 'token_manager', None) if self.bot else None
+		frgnr_sum = 0.0
+		pension_sum = 0.0
+		got_frgnr = False
+		got_pension = False
+		for mrkt_tp in ('001', '101'):  # 코스피 / 코스닥 (추정)
+			try:
+				if tm:
+					data = await tm.call_with_auto_refresh(fn_ka10066, mrkt_tp=mrkt_tp, dt=dt_yyyymmdd)
+				else:
+					data = await fn_ka10066(mrkt_tp=mrkt_tp, dt=dt_yyyymmdd, token=token)
+			except Exception:
+				logger.exception(f"ka10066 호출 실패 (mrkt_tp={mrkt_tp})")
+				continue
+			logger.info(f"[ka10066 raw mrkt_tp={mrkt_tp}] {data}")  # 필드명/단위 보정용
+			f, p = extract_investor_net(data)
+			if f is not None:
+				frgnr_sum += f
+				got_frgnr = True
+			if p is not None:
+				pension_sum += p
+				got_pension = True
+
+		frgnr_eok = frgnr_sum * MARKET_INVESTOR_AMT_TO_EOK if got_frgnr else None
+		pension_eok = pension_sum * MARKET_INVESTOR_AMT_TO_EOK if got_pension else None
+		return frgnr_eok, pension_eok
 
 	# ─────────────────────────────────────────────────────────
 	# 텔레그램 포맷
