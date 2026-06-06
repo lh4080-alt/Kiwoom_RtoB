@@ -239,7 +239,8 @@ class DailyAnalyzer:
 				market = await self._gather_market_info()
 				messages = self._format_telegram(results, market, today)
 				for msg in messages:
-					await tel_send(msg)
+					# 종목명 라인 굵음+밑줄 (<b><u>) 적용 — HTML parse_mode 필요
+					await tel_send(msg, parse_mode='HTML')
 
 			# 매수 대기열 비우기 (전일 잔재 방지)
 			cleared_q = await clear_queue()
@@ -581,7 +582,8 @@ class DailyAnalyzer:
 		else:
 			lines.append("\n⚠️ 시장 환경 데이터 수집 실패")
 
-		lines.append("\n👉 pick <code1> <code2> ... 로 매수 후보 확정")
+		# HTML parse_mode 사용 — &lt; &gt; escape (또는 placeholder 변경)
+		lines.append("\n👉 pick [code1] [code2] ... 로 매수 후보 확정")
 
 		# 메시지 분할 (Telegram 4096 한도)
 		messages = []
@@ -647,7 +649,11 @@ class DailyAnalyzer:
 			logger.exception("[daily_analyzer] next_day_watchlist 저장 실패")
 
 	def _format_one(self, r: dict) -> str:
-		"""종목 1건 포맷 — 체결강도/외인기관/프로그램 + 거래량비 (일봉 의존 부분 [폐기])."""
+		"""종목 1건 포맷 — 체결강도/외인기관/프로그램 + 거래량비 (일봉 의존 부분 [폐기]).
+
+		종목명 라인은 HTML <b><u>...</u></b>로 굵게+밑줄 — tel_send에 parse_mode='HTML' 필요.
+		"""
+		import html as _html
 		# [폐기] 일봉 의존 변수:
 		# chg = r.get('today_chg_pct') or 0
 		# chg_sym = '🟥' if chg > 0 else '🟦' if chg < 0 else '⬜'
@@ -690,8 +696,12 @@ class DailyAnalyzer:
 		# 엣지 점수 70+ 별표 추가
 		pick_mark = ' 🎯' if edge >= EDGE_SCORE_PICK_CUT else ''
 
+		# 종목명 + 코드: html.escape (KT&G 같은 & 처리) + <b><u> 적용
+		name_safe = _html.escape(str(name))
+		code_safe = _html.escape(str(code))
+		header_html = f"📍 <b><u>{name_safe} ({code_safe})</u></b>{highlight}{pick_mark}"
 		return (
-			f"📍 {name} ({code}){highlight}{pick_mark}\n"
+			f"{header_html}\n"
 			f"   ⭐ 엣지 {edge}점 / 종가 {ploc_s} / 체결강도 {cntr_str_s} / 거래량비 {vol_ratio_s}\n"
 			f"   💰 외인 {fmt_streak(r.get('frgnr_streak') or 0)} / "
 			f"기관 {fmt_streak(r.get('orgn_streak') or 0)} / "
