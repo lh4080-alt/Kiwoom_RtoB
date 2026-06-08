@@ -1,4 +1,5 @@
 import pandas as pd
+import re
 import sys
 import os
 
@@ -7,7 +8,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import utils.config as config
 from utils.rate_limiter import requests
+from utils.stock_code_normalizer import normalize_stock_code
 from api.login import fn_au10001 as get_token
+
+# 정상 국내 종목코드 형식 (6자리 영숫자). 모의/실서버가 간헐적으로 필드가 뭉친
+# 깨진 잔고 레코드(예: 12~30자리 stk_cd)를 반환 → 유령 매수/매도 알림·REG 오염 유발하므로 차단.
+_VALID_STK_CD = re.compile(r'[0-9A-Z]{6}')
 
 # 계좌평가현황요청
 async def fn_kt00004(print_df=False, cont_yn='N', next_key='', token=None):
@@ -45,6 +51,20 @@ async def fn_kt00004(print_df=False, cont_yn='N', next_key='', token=None):
 	
 	# 안전한 데이터 접근: .get() 메서드를 사용하여 키가 없을 경우 빈 리스트 반환
 	stk_acnt_evlt_prst = response_data.get('stk_acnt_evlt_prst', [])
+	if not stk_acnt_evlt_prst:
+		return []
+
+	# 깨진 레코드(비정상 stk_cd) 필터 — 유령 매수/매도 알림 + REG 오염 방지
+	valid, dropped = [], []
+	for r in stk_acnt_evlt_prst:
+		code = normalize_stock_code(str(r.get('stk_cd', '') or ''))
+		if _VALID_STK_CD.fullmatch(code):
+			valid.append(r)
+		else:
+			dropped.append(r.get('stk_cd'))
+	if dropped:
+		print(f"[kt00004] 비정상 종목코드 레코드 {len(dropped)}건 제외: {dropped}")
+	stk_acnt_evlt_prst = valid
 	if not stk_acnt_evlt_prst:
 		return []
 
