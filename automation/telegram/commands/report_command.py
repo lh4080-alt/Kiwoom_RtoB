@@ -82,8 +82,9 @@ async def report_command(token_manager, settings_manager=None, background_task_m
 		try:
 			balance_data = await fn_kt00001(token=token_manager.token)
 
-			# balance_data가 딕셔너리인지 확인
-			if balance_data and isinstance(balance_data, dict):
+			# 조회 성공(return_code==0)일 때만 금액 표시 — 실패를 0원으로 위장 금지
+			_rc = balance_data.get('return_code') if isinstance(balance_data, dict) else None
+			if isinstance(balance_data, dict) and _rc in (0, "0"):
 				# D+0 예수금 (entr)
 				entr_d0 = int(balance_data.get('entr', 0) or 0)
 
@@ -105,7 +106,7 @@ async def report_command(token_manager, settings_manager=None, background_task_m
 				balance_message += f"• 예수금(D+2): {d2_entra:,}원 (정산 예정 포함)\n"
 				balance_message += f"• 주문가능액: {calculatable_balance:,}원 (⭐ 매수 기준)\n"
 			else:
-				balance_message += "   자금 정보를 가져올 수 없습니다.\n"
+				balance_message += "   ⚠️ 자금 조회 실패 (일시 오류 — 잠시 후 다시 시도하세요)\n"
 		except Exception as e:
 			balance_message += f"   ⚠️ 자금 조회 실패: {e}\n"
 		
@@ -165,15 +166,18 @@ async def report_command(token_manager, settings_manager=None, background_task_m
 		# 4. 💰 [보유 종목] - 항상 마지막에 전송
 		# ---------------------------------------------------------
 		account_data = None
+		holdings_query_failed = False
 		for _ in range(3):
 			try:
 				account_data = await asyncio.wait_for(
-					fn_kt00004(False, 'N', '', token_manager.token),
+					fn_kt00004(False, 'N', '', token_manager.token, raise_on_error=True),
 					timeout=10.0
 				)
-				# 정상 응답이면 break (빈 리스트도 "보유 없음" 정상으로 인정)
+				holdings_query_failed = False
+				# 정상 응답이면 break (빈 리스트 = 진짜 보유 없음)
 				break
 			except (asyncio.TimeoutError, Exception):
+				holdings_query_failed = True
 				await asyncio.sleep(1)
 				continue
 
@@ -227,6 +231,8 @@ async def report_command(token_manager, settings_manager=None, background_task_m
 			held_message += f"   총 평가손익: {total_pl_amt:,.0f}원\n"
 			held_message += f"\n💎 총자산: {d2_entra + total_stock_evlt:,}원\n"
 			held_message += f"   (예수금 {d2_entra:,} + 주식 {total_stock_evlt:,})\n"
+		elif holdings_query_failed:
+			held_message += "   ⚠️ 보유 종목 조회 실패 (일시 오류 — 잠시 후 다시 시도하세요)\n"
 		else:
 			held_message += "   보유 종목이 없습니다.\n"
 		

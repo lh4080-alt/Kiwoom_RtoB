@@ -16,7 +16,9 @@ from api.login import fn_au10001 as get_token
 _VALID_STK_CD = re.compile(r'[0-9A-Z]{6}')
 
 # 계좌평가현황요청
-async def fn_kt00004(print_df=False, cont_yn='N', next_key='', token=None):
+async def fn_kt00004(print_df=False, cont_yn='N', next_key='', token=None, raise_on_error=False):
+	# raise_on_error=True: 조회 실패(통신/return_code≠0) 시 예외 발생 → 호출처가
+	#   "보유 없음([])"과 "조회 실패"를 구분 가능 (report 등 사용자 보고용). 기본 False는 기존 동작 유지.
 	# 1. 요청할 API URL
 	endpoint = '/api/dostk/acnt'
 	url = config.get_host_url() + endpoint
@@ -37,16 +39,24 @@ async def fn_kt00004(print_df=False, cont_yn='N', next_key='', token=None):
 	}
 
 	# 4. http POST 요청
-	response = await requests.post(url, headers=headers, json=params)
-	response_data = response.json()
-	
+	try:
+		response = await requests.post(url, headers=headers, json=params)
+		response_data = response.json()
+	except Exception as e:
+		print(f"kt00004 조회 실패(통신 오류): {e}")
+		if raise_on_error:
+			raise
+		return []
+
 	# 응답 코드 우선 검증
 	return_code = response_data.get('return_code', None)
-	
+
 	# return_code가 정상("0" 또는 0)이 아닌 경우
 	if return_code != "0" and return_code != 0:
 		return_msg = response_data.get('return_msg', '알 수 없는 오류')
 		print(f"API 호출 예외: {return_msg} (return_code: {return_code})")
+		if raise_on_error:
+			raise RuntimeError(f"kt00004 조회 실패: {return_msg} (return_code={return_code})")
 		return []
 	
 	# 안전한 데이터 접근: .get() 메서드를 사용하여 키가 없을 경우 빈 리스트 반환
