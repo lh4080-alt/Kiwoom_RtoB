@@ -45,14 +45,17 @@ $settings = New-ScheduledTaskSettingsSet `
     -RestartInterval (New-TimeSpan -Minutes 1) `
     -ExecutionTimeLimit (New-TimeSpan -Days 365)
 
+# S4U 로그온: 사용자가 로그인하지 않아도 트리거 발동 (헤드리스 부팅/08:30 자동 기동·재기동).
+# 기존 "대화형만(Interactive)"은 lh408 로그인 상태에서만 떠서, 봇이 죽으면 못 살아나던 원인 (2026-06-10 사고).
+$principal = New-ScheduledTaskPrincipal -UserId "lh408" -LogonType S4U -RunLevel Highest
+
 Register-ScheduledTask `
     -TaskName $TaskName `
     -Action $action `
     -Trigger @($trigger1, $trigger2) `
     -Settings $settings `
-    -RunLevel Highest `
-    -User "lh408" `
-    -Description "kiwoom_RtoB main bot (daemon — boot + daily 08:30, restart on failure)"
+    -Principal $principal `
+    -Description "kiwoom_RtoB main bot (daemon — boot + daily 08:30, restart on failure, S4U headless)"
 
 Write-Host "Task '$TaskName' registered."
 schtasks /Query /TN $TaskName /FO LIST /V
