@@ -13,22 +13,15 @@ USER_GUIDE_MESSAGE = "프로그램 사용법 자세히 보기\nhttps://yalco.not
 PHASE2_COMMANDS = """🆕 [Phase 2 명령]
 
 📌 매수
-• pick <code> [수량] — 다음날 09:00:15 지정가 매수
+• pick <code> [수량] — 장중 신호 매수 (하락 반등 / 상승 신고가, 09:00+delay~15:20)
 • auction <code> [수량] — 다음날 08:30~08:50 동시호가 시장가
-• touch <code> [수량] — 장 중 최저점 반등 시 시장가 매수
 • cancel <code> — 큐 전체(모든 source) 취소
 • auction_list / auction_cancel <code>
-• touch_list / touch_cancel <code>
 
 📌 정보
 • score — semi_trigger 5축 + 4신호 즉시 조회
 • status — 매수 대기열 / halt / 수집풀
 ※ score 자동 알림: 매일 02:00 + 05:30 KST
-
-📌 stick (Feature 2 손절/익절 + 15:20 청산)
-• stick <code> [수량] [tpr <n>] [slr <n>]
-  예: stick 122630 1 tpr 5 slr 3 → +5% 익절 / -3% 손절
-• stick_list / stick_cancel <code>
 
 📌 수동 매도
 • sell <code> — 보유 전체 시장가 매도
@@ -36,35 +29,23 @@ PHASE2_COMMANDS = """🆕 [Phase 2 명령]
 
 📌 자동 매도 (start real 2 필요)
 • Feature 2: tpr/slr 도달 시 시장가 매도
-• stick / auction 종목: 15:20/15:25 동시호가 청산
+• auction 종목: 15:25 동시호가 청산
 
 📌 운영
 • halt / resume — 매수 정지 / 재개
 • holdings_clean <code> — holdings 잔재 청소
 • force_daily — [DEBUG] 16:00 분석 즉시 실행
 
-📌 pick 갭 차단 (% 단위, 즉시 반영)
-• gapup <%> — pick 갭상승 차단 (기본 5)
-• gapdown <%> — pick 갭하락 차단 (기본 3)
-  예: gapup 7 → 시초가/전일종가 ≥ 1.07 차단
-
-📌 touch 진입 임계값 (% 단위, 즉시 반영)
-• touch_rate <%> — 반등 트리거 (기본 10)
-• touch_drop <%> — 최소 하락폭 조건3 (기본 5)
-• touch_inval <%> — 저가 무효화 (기본 3)
-• touch_str <값> — 최소 체결강도 (기본 100)
-
-📌 touch 청산 임계값 (% 단위, 즉시 반영)
-• touch_slr <%> — 손절 (기본 -2)
-• touch_tpr <%> — 익절 (기본 +3)
+📌 pick 설정 (% 단위, 즉시 반영)
+• pick_entry_delay <분> — 감시 시작 (5/10/15/30/60, 기본 10)
+• pick_down_min <음수%> — 하락 하한 (기본 -2). 밑으로 빠지면 매수 금지
+• pick_up_min <양수%> — 상승 천장 (기본 +3). 위로 오르면 추격 금지
 
 설명:
-  touch_rate 10  → 시가-저가의 10% 이상 반등 시 매수
-  touch_drop 5   → 시가 대비 -5% 이상 빠진 종목만 대상
-  touch_inval 3  → 최초 저가에서 추가 3% 빠지면 큐 제거
-  touch_str 100  → 체결강도 100 미만이면 매수 보류
-  touch_slr -2   → -2% 도달 시 시장가 손절
-  touch_tpr 3    → +3% 도달 시 시장가 익절"""
+  09:00+delay 부터 감시. 시가 대비
+  · 하락(0~하한): 반등 + 체결강도↑·거래량↑ [-1% 아래는 +호가] 시 매수
+  · 상승(0~천장): 신고가 갱신 + 체결강도↑·거래량↑ [+1% 위는 +호가] 시 매수
+  · 하한 밑 / 천장 위: 매수 안 함"""
 
 async def send_user_guide():
 	"""프로그램 사용법 링크 + Phase 2 명령 안내 전송."""
