@@ -29,7 +29,6 @@ PHASE2_COMMANDS = """🆕 [Phase 2 명령]
 
 📌 자동 매도 (start real 2 필요)
 • Feature 2: tpr/slr 도달 시 시장가 매도
-• auction 종목: 15:25 동시호가 청산
 
 📌 운영
 • halt / resume — 매수 정지 / 재개
