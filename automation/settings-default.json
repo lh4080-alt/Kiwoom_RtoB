@@ -25,5 +25,5 @@
   "grid_watch_list": [],
   "trailing_min_profit": 0.0,
   "fcond_rules": {},
-  "holdings_manager_enabled": true
+  "holdings_manager_enabled": false
 }
