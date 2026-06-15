@@ -1,0 +1,45 @@
+{
+  "_note": "cond 정의 원본은 조건검색 설계 Claude가 관리 (d:\\Kiwoom_search\\조건검색식_누적.md 08~11번). 여기는 봇 검증용 메타데이터일 뿐 — 실제 매칭은 키움 조건검색 엔진이 수행. 봇 search_seq=[0,1,2,3].",
+  "_verified": "2026-06-15: seq 0/1/2/3 = cond0/1/2/3, HTS 저장 확인, cond3 M/N(5일선 아래 정밀눌림) 활성 확인.",
+  "conds": {
+    "0": {
+      "cond": "cond0",
+      "hts_name": "장기정배열_눌림후재가속",
+      "manual_no": 8,
+      "intent": "1년 우상향 + 박스 휴식 + 재가속 (정예). 1>240MA 10회↑, 등락률 1%↑ — 가장 엄격.",
+      "priority": 1,
+      "expected_daily_count": "0~2"
+    },
+    "1": {
+      "cond": "cond1",
+      "hts_name": "정배열_눌림_익일갭매수",
+      "manual_no": 9,
+      "intent": "정배열 + 60MA추세 + 변동폭20% + 이격도108% + 양봉 + 거래량130% + 등락률0~15% (베이스).",
+      "priority": 4,
+      "expected_daily_count": "1~5"
+    },
+    "2": {
+      "cond": "cond2",
+      "hts_name": "정배열_눌림_익일갭매수_수급동반",
+      "manual_no": 10,
+      "intent": "cond1 + (외국인순매수 OR 기관순매수) 1주↑ — 수급 동반.",
+      "priority": 2,
+      "expected_daily_count": "0~3"
+    },
+    "3": {
+      "cond": "cond3",
+      "hts_name": "정배열_눌림자리_익일갭매수(11지표)",
+      "manual_no": 11,
+      "intent": "정밀 눌림자리 — 5일선 아래(M: 1MA<5MA) + ≥10MA(N), 변동폭30%·이격도115·스팩제외·종가≥5000. (C 추세 비활성)",
+      "priority": 3,
+      "expected_daily_count": "0~2"
+    }
+  },
+  "hypotheses": {
+    "H1": "cond0 정예 우월 — cond0 PF > 1.5, 타 cond보다 높음",
+    "H2": "수급축 알파 — cond2 PF > cond1 PF",
+    "H3": "Z 눌림자리 알파 — cond3 PF > cond1 PF (cond3 표본 충분 시)",
+    "H4": "교집합 강도 알파 — strength 3 PF > strength 1 PF",
+    "H5": "cond3 표본 부족 가능 — trade < 5면 통계 무의미"
+  }
+}
