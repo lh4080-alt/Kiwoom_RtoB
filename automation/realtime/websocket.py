@@ -799,7 +799,10 @@ class UnifiedWebSocket:
 		"""기능 1 조건식 등록 — 1000 OK Bye 등 일시적 끊김 대비 자동 재시도.
 
 		키움 서버가 새 연결 직후 일시 끊는 케이스 (08:59 재로그인 직후 6/2 발생).
-		실패 시: 연결 끊겼으면 재연결 → delay 후 재시도. 최종 실패면 raise.
+		실패 시: 연결 끊겼으면 재연결 → delay 후 재시도.
+		3회 재시도 전부 실패하면 에스컬레이션 1회 (새 토큰 강제 + 새 연결 = 6/15 사고 때
+		수동 완전 재시작이 통한 핵심 차이를 in-process로 복제). 그래도 실패하면 텔레그램
+		강조 경보 후 raise (조용히 묻혀 종일 죽어있던 6/15 재발 방지).
 		"""
 		last_exc = None
 		for attempt in range(max_retries):
@@ -823,7 +826,49 @@ class UnifiedWebSocket:
 					except Exception as ce:
 						print(f'  재연결 실패: {ce}')
 				await asyncio.sleep(delay)
-		raise last_exc
+
+		# ── 에스컬레이션: 일반 재시도 전부 실패 → 수동 재시작에 준하는 복구 1회 ──
+		# 재로그인 진행 중이면 중첩 재로그인 방지 — 경보만 하고 raise.
+		if self.is_relogging:
+			try:
+				await tel_send("❌ [기능1 조건검색] 등록 실패 (재로그인 중). 봇 완전 재시작이 필요할 수 있습니다.")
+			except Exception:
+				pass
+			raise last_exc
+		try:
+			try:
+				await tel_send("⚠️ [기능1 조건검색] 자동복구 시도 중 (새 토큰 + 재연결)...")
+			except Exception:
+				pass
+			print('🔄 기능1 조건검색 — 에스컬레이션 복구 시도 (새 토큰 + 새 연결)')
+			# 죽은 소켓 상태 청산 (1000 Bye 후 connected 플래그가 stale-True인 케이스 대비)
+			try:
+				if self.websocket:
+					await self.websocket.close()
+			except Exception:
+				pass
+			self.connected = False
+			# 새 토큰 강제 발급 — 기존(재로그인 후) 토큰 재사용하지 않음
+			new_token = await self.token_manager.get_token(force_refresh=True)
+			if not new_token:
+				raise RuntimeError('force_refresh 토큰 발급 실패')
+			# 새 연결 (connect 내부에서 _condition_list_loaded=False 리셋)
+			await self.connect(new_token)
+			await asyncio.sleep(delay)
+			await self._register_conditions()
+			print('✅ 기능1 조건검색 — 에스컬레이션 복구 성공')
+			try:
+				await tel_send("✅ [기능1 조건검색] 자동복구 성공.")
+			except Exception:
+				pass
+			return
+		except Exception as ee:
+			print(f'❌ 기능1 에스컬레이션 복구 실패: {type(ee).__name__}: {ee}')
+			try:
+				await tel_send("❌ [기능1 조건검색] 자동복구 실패 — 봇 완전 재시작이 필요합니다 (start 명령은 소용없음).")
+			except Exception:
+				pass
+			raise last_exc
 
 	async def _clear_all_conditions(self):
 		"""등록된 모든 조건식을 해제합니다."""
