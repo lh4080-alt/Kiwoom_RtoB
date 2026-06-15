@@ -348,15 +348,10 @@ class TouchExecutor:
 			logger.info(f"[touch] {code} halt 상태 — 진입 보류 (해제 시 재시도)")
 			return
 
-		# 5-2 트리거 시점 중복 재확인 — 등록-체결 시점차 (auction/pick이 늦게 체결 가능)
+		# 보유 중 차단 제거 (Lee 6/15 결정) — 같은 종목 추가 매수 허용.
+		# holdings_now는 아래 max_holdings 캡 체크에 사용.
 		from utils.holdings import load_holdings
 		holdings_now = await load_holdings()
-		if any(h.get('code') == code for h in holdings_now):
-			# 이미 다른 source로 보유 중 → touch 큐 정리하고 종료
-			await remove_from_queue(code, source='touch')
-			self._cache.pop(code, None)
-			await tel_send(f"♻️ [touch 진입 차단] {code} 이미 보유 중 (다른 source). touch 큐 제거.")
-			return
 
 		# 5-2 max_holdings 슬롯 cap (settings.json) — touch가 cap 우회하지 않도록
 		max_h = int(get_setting('max_holdings', 0) or 0)
