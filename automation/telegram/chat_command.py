@@ -695,9 +695,11 @@ class ChatCommand:
 			from utils.get_setting import get_setting
 			delay = int(get_setting('pick_entry_delay', 10) or 10)
 			down_min = float(get_setting('pick_down_min', -2.0))
+			up_min = float(get_setting('pick_up_min', 3.0))
 			await tel_send(
 				f"✅ [pick 등록] {label} {qty}주\n"
-				f"장중 신호 감시: 09:00+{delay}분 ~ 15:20, 하락 {down_min}% 범위 내 상승조짐 시 시장가 매수\n"
+				f"장중 신호 감시: 09:00+{delay}분 ~ 15:20\n"
+				f"하락 {down_min}%~0: 반등+신호 / 상승 0~+{up_min}%: 신고가+신호 시 시장가 매수\n"
 				f"📦 매수 대기열 총 {len(queue)}건"
 			)
 			import asyncio as _asyncio
@@ -1321,6 +1323,18 @@ class ChatCommand:
 				except ValueError:
 					pass
 			await tel_send("❌ 사용법: pick_down_min {음수%} (예: pick_down_min -2)")
+			return False
+		elif command.startswith('pick_up_min '):
+			parts = command.split()
+			if len(parts) == 2:
+				try:
+					val = float(parts[1])
+					self.settings_manager.update_setting('pick_up_min', val)
+					await tel_send(f"✅ pick 상승 천장 = +{val}% (이 위로 오르면 추격 금지)")
+					return True
+				except ValueError:
+					pass
+			await tel_send("❌ 사용법: pick_up_min {양수%} (예: pick_up_min 3)")
 			return False
 		elif command.startswith('pick_entry_delay '):
 			parts = command.split()

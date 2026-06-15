@@ -36,7 +36,8 @@ FID_PRICE = '10'
 FID_STRENGTH = '228'
 FID_VOL_CUM = '13'
 
-DEEP_LINE_PCT = -1.0   # -1% 분기선 (고정): 위=3조건, 아래(down_min까지)=4조건
+DEEP_LINE_PCT = -1.0   # 하락 -1% 분기선 (고정): 0~-1%=3조건, -1%~down_min=4조건
+UP_DEEP_LINE_PCT = 1.0 # 상승 +1% 분기선 (고정): 0~+1%=3조건, +1%~up_min=4조건
 LOOKBACK_SEC = 60      # 직전 1분 윈도우
 
 
@@ -75,6 +76,8 @@ class PickExecutor:
 		self._buying: set = set()
 		# FID 검증 1회 로그용 (체결강도 228 / 누적거래량 13 실제 존재 확인)
 		self._logged_fids: set = set()
+		# 세션 최고가 {code: high} — 상승 case 신고가 갱신 판정
+		self._session_high: dict = {}
 
 	def start(self):
 		if self._task is None or self._task.done():
@@ -90,6 +93,10 @@ class PickExecutor:
 	def _down_min(self) -> float:
 		from utils.get_setting import get_setting
 		return float(get_setting('pick_down_min', -2.0))
+
+	def _up_min(self) -> float:
+		from utils.get_setting import get_setting
+		return float(get_setting('pick_up_min', 3.0))
 
 	def _entry_delay_min(self) -> int:
 		from utils.get_setting import get_setting
@@ -120,6 +127,7 @@ class PickExecutor:
 		"""pick 등록 명령에서 호출 — 0B 등록 + 상태 초기화."""
 		self._open.pop(code, None)
 		self._hist.pop(code, None)
+		self._session_high.pop(code, None)
 		await self._register_0b([code])
 
 	async def _reregister_queue_on_startup(self):
@@ -156,6 +164,12 @@ class PickExecutor:
 		if h and h[0][0] < cutoff:
 			self._hist[code] = [r for r in h if r[0] >= cutoff]
 
+		# 세션 신고가 갱신 판정 (상승 case): 직전 최고가 초과 시 True
+		prior_high = self._session_high.get(code, 0.0)
+		is_new_high = float(current_price) > prior_high
+		if is_new_high:
+			self._session_high[code] = float(current_price)
+
 		if not self._monitor_active():
 			return
 		if code in self._buying:
@@ -163,7 +177,7 @@ class PickExecutor:
 		if self._check_lock.locked():
 			return
 		async with self._check_lock:
-			await self._evaluate_one(code, current_price_hint=current_price)
+			await self._evaluate_one(code, current_price_hint=current_price, is_new_high=is_new_high)
 
 	# ── fallback (1분) ───────────────────────────────────────
 	async def _scheduler_loop(self):
@@ -242,7 +256,7 @@ class PickExecutor:
 			return False
 
 	# ── 트리거 평가 + 매수 ───────────────────────────────────
-	async def _evaluate_one(self, code: str, current_price_hint=None):
+	async def _evaluate_one(self, code: str, current_price_hint=None, is_new_high: bool = False):
 		from telegram.tel_send import tel_send
 		from utils.buy_queue import load_queue, remove_from_queue
 		from utils.holdings import add_holding, calc_sell_deadline
@@ -298,20 +312,32 @@ class PickExecutor:
 		if cur <= 0:
 			return
 
-		drop = (cur - open_prc) / open_prc * 100.0
+		chg = (cur - open_prc) / open_prc * 100.0   # 시가 대비 등락 %
 		down_min = self._down_min()
-
-		# 밴드 판정
-		if drop >= 0:
-			return                       # 하락 case 아님 (상승 case는 별도 — 다음 단계)
-		if drop < down_min:
-			return                       # 바닥 밑 → 매수 금지
-
+		up_min = self._up_min()
 		a, b, c = self._window_signals(code, cur)
-		if not (a and b and c):
-			return                       # 3조건 미충족
 
-		need_d = drop < DEEP_LINE_PCT    # -1% 밑(깊은 하락) → d 추가 필요
+		if chg < 0:
+			# ── 하락 case: 반등(a) + 체결강도↑(b) + 거래량↑(c) [+ 호가(d)] ──
+			if chg < down_min:
+				return                   # 바닥 밑 → 매수 금지
+			if not (a and b and c):
+				return
+			need_d = chg < DEEP_LINE_PCT  # -1% 밑(깊은 하락)
+			direction = '하락'
+		elif chg > 0:
+			# ── 상승 case: 신고가 갱신 + 체결강도↑(b) + 거래량↑(c) [+ 호가(d)] ──
+			if chg > up_min:
+				return                   # 천장 위 → 추격 금지
+			if not is_new_high:
+				return                   # 신고가 갱신 시점만 (고점 밑/눌림에선 대기)
+			if not (b and c):
+				return                   # 체결강도↑·거래량↑ 미충족
+			need_d = chg > UP_DEEP_LINE_PCT  # +1% 위(더 오른 구간)
+			direction = '상승'
+		else:
+			return                       # 시가와 동일
+
 		if need_d:
 			if not await self._check_d_buy_dominance(code, token):
 				return
@@ -358,13 +384,14 @@ class PickExecutor:
 			await add_holding(holding)
 			await remove_from_queue(code, source='pick')
 
-			band = '4조건(깊은하락)' if need_d else '3조건(얕은하락)'
+			band = '4조건' if need_d else '3조건'
 			delay = self._entry_delay_min()
-			logger.info(f"[pick] {code} {qty}주 매수 ord_no={ord_no} drop={drop:.2f}% band={band} delay={delay}m a/b/c/d={a}/{b}/{c}/{need_d}")
+			price_sig = '신고가갱신' if direction == '상승' else '반등(a)'
+			logger.info(f"[pick] {code} {qty}주 매수 ord_no={ord_no} {direction} {chg:+.2f}% band={band} delay={delay}m price={price_sig} b/c={b}/{c} d={need_d}")
 			await tel_send(
 				f"🎯 [pick 매수] {code} {qty}주 (시장가)\n"
-				f"  시가={int(open_prc):,} 현재={int(cur):,} (drop {drop:.2f}%)\n"
-				f"  {band} 충족 (delay {delay}분) ord_no {ord_no}"
+				f"  시가={int(open_prc):,} 현재={int(cur):,} ({direction} {chg:+.2f}%)\n"
+				f"  {band}·{price_sig} 충족 (delay {delay}분) ord_no {ord_no}"
 			)
 		finally:
 			self._buying.discard(code)
