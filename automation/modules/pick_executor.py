@@ -8,7 +8,7 @@ pick_executor — pick 명령 장중 신호기반 진입 (하락 case). touch_ex
     a 가격상승   : 현재가 > 직전 1분 평균가
     b 체결강도↑  : 현재 체결강도 > 직전 1분 평균 체결강도
     c 거래량↑    : 최근 1분 거래량(누적증가분) > 직전 1분 거래량
-    d 호가 매수우위: 매수총잔량 > 매도총잔량 (ka10004, 트리거 직전 1회만)
+    d 매수우위(체결): 0B 매수비율(1032) > 50% (없으면 1031>1030) — 추가 API 없음
 - 밴드 (down_min = 설정 하한, -1% 분기선 고정):
     0% > drop ≥ -1%        : a∧b∧c        → 매수 (얕은 하락)
     -1% > drop ≥ down_min  : a∧b∧c∧d      → 매수 (깊은 하락, 더 엄격)
@@ -17,8 +17,9 @@ pick_executor — pick 명령 장중 신호기반 진입 (하락 case). touch_ex
 
 settings: pick_down_min(기본 -2.0), pick_entry_delay(분, 기본 10)
 
-⚠️ 0B FID 추정: 체결강도=228, 누적거래량=13 (현재가=10·거래량=15는 봇 코드에서 확인됨).
-   ka10004 잔량 필드 추정: tot_buy_req/tot_sel_req. 첫 실전 [pick raw] 로그로 검증 후 보정.
+0B FID (명세 p.477 확정): 현재가=10, 거래량=15, 누적거래량=13, 체결강도=228, 매수비율=1032.
+   d(매수비율 1032)는 명세 예시에서 빈 값일 수 있음 → [pick raw 0B] 로그로 실제 채워지는지 확인.
+   비어도 deep band만 보류(얕은 band는 정상). 상승 case는 a 대신 '신고가 갱신' 사용.
 """
 import asyncio
 import logging
@@ -78,6 +79,8 @@ class PickExecutor:
 		self._logged_fids: set = set()
 		# 세션 최고가 {code: high} — 상승 case 신고가 갱신 판정
 		self._session_high: dict = {}
+		# 매수우위(체결 기반) {code: bool} — d 신호 (0B 매수비율 1032 > 50)
+		self._buy_dom: dict = {}
 
 	def start(self):
 		if self._task is None or self._task.done():
@@ -150,13 +153,26 @@ class PickExecutor:
 			return
 		# 히스토리 적재 (감시 구간 밖이어도 워밍업 위해 적재)
 		t = datetime.now().timestamp()
-		strength = _to_float((values or {}).get(FID_STRENGTH))
-		cum_vol = _to_float((values or {}).get(FID_VOL_CUM))
-		# FID 검증용 1회 로그 — 체결강도(228)·누적거래량(13)이 실제 0B에 오는지 확인 (틀리면 매수 미발동)
+		v = values or {}
+		strength = _to_float(v.get(FID_STRENGTH))
+		cum_vol = _to_float(v.get(FID_VOL_CUM))
+		# d 신호용 매수우위(체결 기반): 매수비율(1032)>50, 없으면 매수체결량(1031)>매도체결량(1030),
+		# 그것도 없으면 순매수체결량(1314)>0. 셋 다 없으면 미갱신(이전 값 유지, 없으면 False→deep band 보류).
+		_ratio = _to_float(v.get('1032'))
+		_bvol = _to_float(v.get('1031'))
+		_svol = _to_float(v.get('1030'))
+		_net = _to_float(v.get('1314'))
+		if _ratio > 0:
+			self._buy_dom[code] = _ratio > 50.0
+		elif _bvol > 0 or _svol > 0:
+			self._buy_dom[code] = _bvol > _svol
+		elif _net != 0:
+			self._buy_dom[code] = _net > 0
+		# FID 검증용 1회 로그 — 체결강도(228)·누적거래량(13)·매수비율(1032) 실제 0B 존재 확인
 		if values and code not in self._logged_fids:
 			self._logged_fids.add(code)
-			logger.info(f"[pick raw 0B {code}] 228(체결강도)={values.get('228')} "
-			            f"13(누적거래량)={values.get('13')} 15(거래량)={values.get('15')} keys={sorted(values.keys())}")
+			logger.info(f"[pick raw 0B {code}] 228(체결강도)={v.get('228')} 13(누적거래량)={v.get('13')} "
+			            f"15(거래량)={v.get('15')} 1032(매수비율)={v.get('1032')} 1031={v.get('1031')} 1030={v.get('1030')} keys={sorted(v.keys())}")
 		h = self._hist.setdefault(code, [])
 		h.append((t, float(current_price), strength, cum_vol))
 		# 2분 초과 항목 prune
@@ -229,32 +245,6 @@ class PickExecutor:
 				c = vol_last > vol_prev
 		return a, b, c
 
-	async def _check_d_buy_dominance(self, code: str, token) -> bool:
-		"""d: 매수총잔량 > 매도총잔량 (ka10004 1회 조회). 실패/불명확 시 False(보수)."""
-		try:
-			import utils.config as config
-			from utils.rate_limiter import requests
-			endpoint = '/api/dostk/mrkcond'
-			url = config.get_host_url() + endpoint
-			headers = {
-				'Content-Type': 'application/json;charset=UTF-8',
-				'authorization': f'Bearer {token}',
-				'cont-yn': 'N', 'next-key': '', 'api-id': 'ka10004',
-			}
-			resp = await requests.post(url, headers=headers, json={'stk_cd': code})
-			data = resp.json()
-			logger.info(f"[pick raw ka10004 {code}] {data}")  # 잔량 필드명 검증용
-			if data.get('return_code') not in (0, '0'):
-				return False
-			buy_req = _to_float(data.get('tot_buy_req'))   # 매수총잔량 (필드명 추정)
-			sel_req = _to_float(data.get('tot_sel_req'))   # 매도총잔량 (필드명 추정)
-			if buy_req <= 0 and sel_req <= 0:
-				return False  # 필드 못 읽음 → 보수적으로 미충족
-			return buy_req > sel_req
-		except Exception:
-			logger.exception(f"[pick] {code} ka10004(d) 조회 실패")
-			return False
-
 	# ── 트리거 평가 + 매수 ───────────────────────────────────
 	async def _evaluate_one(self, code: str, current_price_hint=None, is_new_high: bool = False):
 		from telegram.tel_send import tel_send
@@ -318,7 +308,7 @@ class PickExecutor:
 		a, b, c = self._window_signals(code, cur)
 
 		if chg < 0:
-			# ── 하락 case: 반등(a) + 체결강도↑(b) + 거래량↑(c) [+ 호가(d)] ──
+			# ── 하락 case: 반등(a) + 체결강도↑(b) + 거래량↑(c) [+ 매수우위(d)] ──
 			if chg < down_min:
 				return                   # 바닥 밑 → 매수 금지
 			if not (a and b and c):
@@ -326,7 +316,7 @@ class PickExecutor:
 			need_d = chg < DEEP_LINE_PCT  # -1% 밑(깊은 하락)
 			direction = '하락'
 		elif chg > 0:
-			# ── 상승 case: 신고가 갱신 + 체결강도↑(b) + 거래량↑(c) [+ 호가(d)] ──
+			# ── 상승 case: 신고가 갱신 + 체결강도↑(b) + 거래량↑(c) [+ 매수우위(d)] ──
 			if chg > up_min:
 				return                   # 천장 위 → 추격 금지
 			if not is_new_high:
@@ -339,8 +329,8 @@ class PickExecutor:
 			return                       # 시가와 동일
 
 		if need_d:
-			if not await self._check_d_buy_dominance(code, token):
-				return
+			if not self._buy_dom.get(code, False):
+				return  # 깊은 구간 + 매수우위(체결) 미확인 → 보류
 
 		# ── 매수 (touch 패턴) ──
 		self._buying.add(code)
