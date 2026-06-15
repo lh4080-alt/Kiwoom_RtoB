@@ -1994,7 +1994,8 @@ class UnifiedWebSocket:
 		# Phase 2 Step C: 보유 종목 손절 모니터링은 features 활성화와 무관하게 동작
 		holdings_mgr = getattr(self, 'holdings_manager', None)
 		touch_exec = getattr(self, 'touch_executor', None)
-		if holdings_mgr is not None or touch_exec is not None:
+		pick_exec = getattr(self, 'pick_executor', None)
+		if holdings_mgr is not None or touch_exec is not None or pick_exec is not None:
 			try:
 				code_raw = response.get('item', '')
 				if isinstance(code_raw, list):
@@ -2011,6 +2012,8 @@ class UnifiedWebSocket:
 							asyncio.create_task(holdings_mgr.on_0b_quote(code_raw, current))
 						if touch_exec is not None:
 							asyncio.create_task(touch_exec.on_0b_quote(code_raw, current))
+						if pick_exec is not None:
+							asyncio.create_task(pick_exec.on_0b_quote(code_raw, current, v))
 			except Exception:
 				logger.exception("0B dispatch error")
 

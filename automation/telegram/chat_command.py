@@ -130,6 +130,11 @@ class ChatCommand:
 		# websocket의 0B 핸들러가 touch_executor.on_0b_quote 호출하도록 연결
 		self.websocket.touch_executor = self.touch_executor
 
+		# pick — 0B 신호기반 장중 진입 (하락 case). touch와 병렬 (touch 무손상).
+		from modules.pick_executor import PickExecutor
+		self.pick_executor = PickExecutor(bot_ref=self)
+		self.websocket.pick_executor = self.pick_executor
+
 		# semi_trigger snapshot 스케줄러 (02:00 + 05:30 KST 자동 + 텔레그램 score 명령)
 		from modules.semi_trigger.scheduler import SnapshotScheduler
 		self.snapshot_scheduler = SnapshotScheduler(bot_ref=self)
@@ -685,12 +690,19 @@ class ChatCommand:
 		name = await get_stock_name(code)
 		label = f"{code} {name}" if name else code
 
-		if await add_to_queue(code, approved_by='telegram', qty=qty):
+		if await add_to_queue(code, approved_by='telegram', qty=qty, source='pick'):
 			queue = await load_queue()
+			from utils.get_setting import get_setting
+			delay = int(get_setting('pick_entry_delay', 10) or 10)
+			down_min = float(get_setting('pick_down_min', -2.0))
 			await tel_send(
-				f"✅ [매수 후보 승인] {label} {qty}주\n"
+				f"✅ [pick 등록] {label} {qty}주\n"
+				f"장중 신호 감시: 09:00+{delay}분 ~ 15:20, 하락 {down_min}% 범위 내 상승조짐 시 시장가 매수\n"
 				f"📦 매수 대기열 총 {len(queue)}건"
 			)
+			import asyncio as _asyncio
+			await self.pick_executor.register_for_pick(code)
+			_asyncio.create_task(self.pick_executor._check_all())
 		else:
 			queue = await load_queue()
 			await tel_send(
@@ -1297,6 +1309,26 @@ class ChatCommand:
 			if len(parts) == 2:
 				return await self.touch_str(parts[1])
 			await tel_send("❌ 사용법: touch_str {값} (예: touch_str 100)")
+			return False
+		elif command.startswith('pick_down_min '):
+			parts = command.split()
+			if len(parts) == 2:
+				try:
+					val = float(parts[1])
+					self.settings_manager.update_setting('pick_down_min', val)
+					await tel_send(f"✅ pick 하락 하한 = {val}% (이 범위 내에서만 매수, 밑으로 빠지면 대기)")
+					return True
+				except ValueError:
+					pass
+			await tel_send("❌ 사용법: pick_down_min {음수%} (예: pick_down_min -2)")
+			return False
+		elif command.startswith('pick_entry_delay '):
+			parts = command.split()
+			if len(parts) == 2 and parts[1] in ('5', '10', '15', '30', '60'):
+				self.settings_manager.update_setting('pick_entry_delay', int(parts[1]))
+				await tel_send(f"✅ pick 감시 시작 = 09:00 + {parts[1]}분")
+				return True
+			await tel_send("❌ 사용법: pick_entry_delay {5|10|15|30|60}")
 			return False
 		elif command.startswith('touch '):
 			parts = text.strip().split()[1:]

@@ -148,8 +148,8 @@ class BuyExecutor:
 			logger.exception("[buy_executor] pnl 한도 체크 실패 (매수 진행)")
 
 		queue = await load_queue()
-		# auction은 08:30 stick_executor / touch는 장 중 touch_executor가 처리.
-		queue = [q for q in queue if q.get('source') not in ('auction', 'touch')]
+		# auction은 08:30 stick_executor / touch·pick은 장 중 touch_executor·pick_executor가 처리.
+		queue = [q for q in queue if q.get('source') not in ('auction', 'touch', 'pick')]
 		if not queue:
 			await tel_send("[09:00] buy_queue 비어있음 — 매수 없음")
 			return
