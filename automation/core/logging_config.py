@@ -47,12 +47,28 @@ def _resolve_level() -> int:
 
 def setup_logging():
 	"""봇 startup 시 1회 호출."""
+	fmt = KSTFormatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
 	handler = logging.StreamHandler(sys.stdout)
-	handler.setFormatter(KSTFormatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s'))
+	handler.setFormatter(fmt)
+	handlers = [handler]
+
+	# 파일 로깅 추가 (run.bat 콘솔 전용 운영 대비 — SSH로 추적 가능, 콘솔 QuickEdit 멈춤과 무관).
+	# 별도 파일(bot_app.log)이라 cmd 래퍼 stdout→bot.log redirect와 중복 안 됨. 회전 5MB×3.
+	try:
+		from logging.handlers import RotatingFileHandler
+		_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+		_logdir = os.path.join(_root, 'logs')
+		os.makedirs(_logdir, exist_ok=True)
+		fh = RotatingFileHandler(os.path.join(_logdir, 'bot_app.log'),
+		                         maxBytes=5 * 1024 * 1024, backupCount=3, encoding='utf-8')
+		fh.setFormatter(fmt)
+		handlers.append(fh)
+	except Exception:
+		pass  # 파일 로깅 실패해도 콘솔(stdout)은 유지
 
 	logging.basicConfig(
 		level=_resolve_level(),
-		handlers=[handler],
+		handlers=handlers,
 		force=True,
 	)
 
