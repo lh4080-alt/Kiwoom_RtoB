@@ -162,10 +162,12 @@ class PickExecutor:
 		_bvol = _to_float(v.get('1031'))
 		_svol = _to_float(v.get('1030'))
 		_net = _to_float(v.get('1314'))
-		if _ratio > 0:
-			self._buy_dom[code] = _ratio > 50.0
-		elif _bvol > 0 or _svol > 0:
+		# d = 체결 매수우위. 1031(매수체결량)>1030(매도체결량)이 가장 명확 (실데이터 확인).
+		# 1032 매수비율은 0~100%가 아니라 부호값(+매수우위/-매도우위) — 보조.
+		if _bvol > 0 or _svol > 0:
 			self._buy_dom[code] = _bvol > _svol
+		elif _ratio != 0:
+			self._buy_dom[code] = _ratio > 0
 		elif _net != 0:
 			self._buy_dom[code] = _net > 0
 		# FID 검증용 1회 로그 — 체결강도(228)·누적거래량(13)·매수비율(1032) 실제 0B 존재 확인
