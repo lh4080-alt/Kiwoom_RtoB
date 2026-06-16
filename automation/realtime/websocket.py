@@ -1871,6 +1871,30 @@ class UnifiedWebSocket:
 						'current_price': current_price,
 					}
 
+					# ── 손절/익절 폴백 안전망 (0B push 놓침 대비) ──────────────────
+					# 기능2 청산은 0B push 전용 → 구독 끊김/핸들러 누락 시 손절을 놓쳐
+					# 재시작 때 뒤늦게 더 나쁜 가격에 나감(017670 -4.25%). 10초 동기화의
+					# kt00004 가격(0B 독립)으로 pl% 재확인해 임계 초과 시 폴백 매도.
+					# 매도는 0B와 동일 _execute_sell_order(processing_stocks 락+ORDERING
+					# 가드로 이중매도 방지, touch source는 touch_executor로 자동 위임).
+					try:
+						if (self.feature_2_active and avg_price > 0 and current_price > 0
+								and stk_cd_clean not in self.processing_stocks):
+							pl_pct = (current_price - avg_price) / avg_price * 100.0
+							from utils.holdings import get_holding_override
+							_ov = get_holding_override(stk_cd_clean)
+							tp = _ov['tpr'] if _ov['tpr'] is not None else cached_setting('take_profit_rate', 10.0)
+							sl = _ov['slr'] if _ov['slr'] is not None else cached_setting('stop_loss_rate', -10.0)
+							if pl_pct >= tp or pl_pct <= sl:
+								sd = self.portfolio.get(stk_cd_clean)
+								if sd and sd.get('quantity', 0) > 0 and sd.get('status') != 'ORDERING':
+									reason = ("익절" if pl_pct >= tp else "손절") + "(폴백)"
+									logger.warning(f"[failsafe] {sd.get('name', stk_cd_clean)} ({stk_cd_clean}) "
+									               f"pl={pl_pct:.2f}% (기준 익절{tp}/손절{sl}) → {reason} 폴백 매도 — 0B 놓침 추정")
+									await self._execute_sell_order(stk_cd_clean, sd, current_price, pl_pct, reason)
+					except Exception as _fe:
+						logger.exception(f"[failsafe] {stk_cd_clean} 폴백 손절 체크 오류: {_fe}")
+
 				# 유효한 보유 종목이 없으면 이번 회차 스킵(이상치 방어)
 				if not real_map:
 					# 보유 종목이 없어도 이전 목록과 비교하여 매도 완료 알림
