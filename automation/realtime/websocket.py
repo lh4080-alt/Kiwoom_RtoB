@@ -1649,9 +1649,13 @@ class UnifiedWebSocket:
 			
 			# === 디바운싱: 요청을 큐에 추가하고 배치로 처리 ===
 			await self._queue_reg_request(new_stock_codes, ['0B'], force_refresh)
-			
+
 		except Exception as e:
-			print(f"0B 실시간 등록 실패: {e}")
+			# 연결 종료 중(1000 OK Bye) 실패는 정상 — 콘솔 도배 방지(logger.debug만).
+			if isinstance(e, websockets.ConnectionClosed):
+				logger.debug(f"0B 등록 준비 실패(연결 종료): {e}")
+			else:
+				print(f"0B 실시간 등록 실패: {e}")
 	
 	async def _queue_reg_request(self, stock_codes, item_type, force_refresh=False):
 		"""
@@ -1765,8 +1769,12 @@ class UnifiedWebSocket:
 			
 			print(f"0B 실시간 등록 완료: 총 {len(stock_codes)}개 종목\n")
 		except Exception as e:
-			print(f"0B 실시간 등록 실패: {e}")
-	
+			# 연결 종료 중(1000 OK Bye) REG 실패는 정상 — 재연결이 처리. 콘솔 도배 방지(logger.debug만).
+			if isinstance(e, websockets.ConnectionClosed):
+				logger.debug(f"0B REG 전송 실패(연결 종료, 재연결이 처리): {e}")
+			else:
+				print(f"0B 실시간 등록 실패: {e}")
+
 	async def _register_order_execution(self):
 		"""
 		주문체결(00) 실시간 알림을 등록합니다.
@@ -1806,7 +1814,11 @@ class UnifiedWebSocket:
 			}, self.token)
 			print(f"0B 실시간 해제 완료: {stock_code}")
 		except Exception as e:
-			print(f"0B 실시간 해제 실패: {e}")
+			# 연결 종료 중(1000 OK Bye) REMOVE 실패는 정상 — 콘솔 도배 방지(logger.debug만).
+			if isinstance(e, websockets.ConnectionClosed):
+				logger.debug(f"0B REMOVE 실패(연결 종료): {e}")
+			else:
+				print(f"0B 실시간 해제 실패: {e}")
 	
 	async def _sync_portfolio_task(self):
 		"""
