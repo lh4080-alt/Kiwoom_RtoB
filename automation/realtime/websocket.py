@@ -399,7 +399,7 @@ class UnifiedWebSocket:
 
 						if stock_codes:
 							codes_str = ", ".join(stock_codes)
-							print(f'✅ 조건식 등록 성공 (seq: {seq}) - 초기 스냅샷 {len(stock_codes)}종목: {codes_str}')
+							logger.info(f'[조건등록] seq={seq} 초기 스냅샷 {len(stock_codes)}종목: {codes_str}')
 							await tel_send(f'📊 조건식 등록 (seq={seq}) - {len(stock_codes)}종목\n{codes_str}')
 							seq_str = str(seq) if seq != '알 수 없음' else None
 							for code in stock_codes:
@@ -409,11 +409,11 @@ class UnifiedWebSocket:
 								self.processing_stocks.add(code)
 								asyncio.create_task(self._safe_add_to_pool(code, seq_id=seq_str))
 						else:
-							print(f'✅ 조건식 등록 성공 (seq: {seq}) - 초기 스냅샷 없음')
+							logger.warning(f'[조건등록] seq={seq} 초기 스냅샷 없음 (등록 성공이나 매칭 0 — 장시작 수집 유실 가능)')
 							await tel_send(f'📊 조건식 등록 (seq={seq}) - 초기 스냅샷 없음')
 					else:
 						# 조건식 등록 실패
-						print(f'❌ 조건식 등록 실패 (seq: {seq}) - {return_msg}')
+						logger.error(f'[조건등록] seq={seq} 등록 실패 - {return_msg}')
 
 				# CNSRCLR (조건식 해제) 응답 처리
 				elif trnm == 'CNSRCLR':
@@ -1203,6 +1203,32 @@ class UnifiedWebSocket:
 		"""기능 1 (조건식 검색) 시작"""
 		self.feature_1_active = True
 		await self._register_conditions_with_retry()
+		# 장시작 수집 자가복구: 등록 후에도 수집풀이 비면(스냅샷 누락/등록 삐끗으로
+		# 그날 수집 통째 유실 — 6/03 사례) 1회 재등록해 증상을 차단. 장중 재부팅은
+		# 풀이 보존돼 비지 않으므로 자연히 작동 안 함(빈 풀일 때만 동작).
+		asyncio.create_task(self._verify_collection_after_start())
+
+	async def _verify_collection_after_start(self, delay=180):
+		"""기능1 시작 delay초 후 수집풀이 0종목이면 수집 실패로 보고 조건식 재등록 1회."""
+		try:
+			await asyncio.sleep(delay)
+			if not self.feature_1_active:
+				return
+			from utils.collection_pool import get_pool
+			pool = get_pool()
+			if pool:
+				logger.info(f"[수집검증] 기능1 시작 {delay}초 후 수집풀 {len(pool)}종목 — 정상")
+				return
+			logger.warning(f"[수집검증] 기능1 시작 {delay}초 후 수집풀 0종목 — 수집 실패 추정, 조건식 재등록(자가복구)")
+			await tel_send("⚠️ [기능1] 장시작 수집 0종목 — 조건식 재등록 자가복구 시도")
+			await self._register_conditions_with_retry()
+			await asyncio.sleep(30)
+			pool2 = get_pool()
+			logger.info(f"[수집검증] 재등록 후 수집풀 {len(pool2)}종목")
+			if not pool2:
+				await tel_send("❗ [기능1] 재등록 후에도 수집 0종목 — 조건 미충족이거나 등록 불가. 봇 완전 재시작 검토.")
+		except Exception:
+			logger.exception("[수집검증] 자가복구 중 오류")
 
 	async def stop_feature_1(self):
 		"""기능 1 (조건식 검색) 중지"""

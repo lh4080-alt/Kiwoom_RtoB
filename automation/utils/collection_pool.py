@@ -8,8 +8,11 @@
 """
 import asyncio
 import json
+import logging
 import os
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _POOL_PATH = os.path.join(_BASE_DIR, 'config', 'data', 'collection_pool.json')
@@ -102,7 +105,7 @@ async def add_to_pool(stk_cd, condition_name=None, seq_id=None):
 	tag = f"[{cond}]" if cond else (f"[seq:{seq_str}]" if seq_str else "")
 	name = await get_stock_name(stk_cd)
 	name_part = f" {name}" if name else ""
-	print(f"📥 [수집풀] {stk_cd}{name_part} {tag} — 누적 {entry['hit_count']}회 (총 {len(pool)}종목)")
+	logger.info(f"[수집풀] {stk_cd}{name_part} {tag} — 누적 {entry['hit_count']}회 (총 {len(pool)}종목)")
 
 
 def get_pool() -> dict:
