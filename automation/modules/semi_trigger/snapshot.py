@@ -24,6 +24,42 @@ logger = logging.getLogger(__name__)
 # z 트렌드 표시 일수 (3일전/2일전/어제/오늘)
 Z_HISTORY_DAYS = 4
 
+# 눌림 매수 후보 판정 (2026-07-16 백테스트 결론)
+# 5년 walk-forward 검증: 순방향(≥+1.0 매수)은 기저 이하 → 폐기.
+# 역방향(≤-1.0) + 60일선 위(추세 필터)가 기저 대비 우위 → 눌림 매수 후보로 표시.
+DIP_THRESHOLD = -1.0
+TREND_MA_DAYS = 60
+
+
+async def fetch_trend_info(token: str, eval_date: str) -> dict:
+	"""종목별 60일선 대비 위치 — 눌림 매수 후보의 추세 필터.
+
+	Returns: {code: {'close': 원, 'ma60': 원, 'uptrend': bool|None}}
+	"""
+	from .etf_mapping import TARGET_UNDERLYINGS
+	from api.daily_candle import fn_ka10081
+	base_dt = eval_date.replace('-', '')
+	info = {}
+	for code in TARGET_UNDERLYINGS:
+		result = {'close': None, 'ma60': None, 'uptrend': None}
+		try:
+			resp = await fn_ka10081(code, base_dt=base_dt, token=token, silent=True)
+			candles = []
+			if isinstance(resp, dict) and resp.get('return_code') == 0:
+				candles = [c for c in resp.get('candles', [])
+				           if str(c.get('date', '')) <= base_dt and c.get('close')]
+			candles.sort(key=lambda c: c['date'], reverse=True)
+			closes = [c['close'] for c in candles[:TREND_MA_DAYS]]
+			if len(closes) >= TREND_MA_DAYS:
+				ma = sum(closes) / len(closes)
+				result = {'close': closes[0], 'ma60': ma, 'uptrend': closes[0] > ma}
+			elif closes:
+				result['close'] = closes[0]
+		except Exception:
+			logger.exception(f"[snapshot] trend info 실패 {code}")
+		info[code] = result
+	return info
+
 
 def calc_z_history(db_col: str, dates_desc: list, raw_history: list,
                    trail_n: int = Z_HISTORY_DAYS) -> list:
@@ -126,8 +162,40 @@ def format_snapshot_message(output: dict, label: str,
 	# 점수 정보 (모든 종목 동일하지만 첫 번째 사용)
 	semi_score = common.get('semi_score')
 	score_str = f"{semi_score:+.3f}" if semi_score is not None else "N/A"
-	trig = "🎯 TRIGGER" if common.get('trigger') else "⏸️ 미달"
 	redistr = " (가중재분배)" if common.get('weight_redistributed') else ""
+
+	# 눌림 매수 후보 판정 — 2단계 (2026-07-16 Lee 확정)
+	# 판정은 반도체 축만 사용, fx/nq는 표시 전용 (가중치 민감도 테스트: 희석 확인)
+	#   🛒🛒 강한 눌림: us_memory z ≤ -1.0
+	#   🛒 일반 눌림:  주식축 합성 z (us_mem 0.6 + legacy 0.4) ≤ -1.0
+	# 공통 추세 필터: 종목 종가가 60일선 위 (종목별 개별 판정)
+	trend_info = output.get('trend_info', {})
+	fz = common.get('factors_z', {})
+	z_us = fz.get('us_memory')
+	z_leg = fz.get('legacy_sox_nvda')
+	_parts = [(z_us, 0.6), (z_leg, 0.4)]
+	_valid = [(z, w) for z, w in _parts if z is not None]
+	stock_z = (sum(z * w for z, w in _valid) / sum(w for _, w in _valid)
+	           if _valid else None)
+	strong = z_us is not None and z_us <= DIP_THRESHOLD
+	normal = stock_z is not None and stock_z <= DIP_THRESHOLD
+	if strong or normal:
+		tier_tag = "🛒🛒 강한 눌림" if strong else "🛒 눌림"
+		basis = f"us_mem z {z_us:+.2f}" if strong else f"주식축 z {stock_z:+.2f}"
+		cands, excluded = [], []
+		for t in targets:
+			ti = trend_info.get(t['code'], {})
+			(cands if ti.get('uptrend') else excluded).append(t['name'])
+		if cands:
+			dip_line = f"{tier_tag} 매수 후보: {', '.join(cands)} ({basis} + 60일선 위)"
+			if excluded:
+				dip_line += f" / 제외: {', '.join(excluded)} (60일선 아래)"
+		else:
+			dip_line = f"⚠️ {tier_tag}({basis})이지만 후보 없음 — 두 종목 모두 60일선 아래"
+	else:
+		zs = f"us_mem {z_us:+.2f}" if z_us is not None else "us_mem N/A"
+		zs += f" / 주식축 {stock_z:+.2f}" if stock_z is not None else ""
+		dip_line = f"⏸️ 눌림 아님 ({zs} — 기준 ≤ {DIP_THRESHOLD})"
 
 	lines = [
 		f"📊 [semi_trigger {output.get('date')} {label}]",
@@ -152,7 +220,8 @@ def format_snapshot_message(output: dict, label: str,
 		f"③ fx_change (10%)  {fmt_pct(fr.get('fx_change'))}  z={z_for(zh_common, 'fx')}",
 		f"④ nasdaq_futures (10%)  {fmt_pct(fr.get('nasdaq_futures'))}  z={z_for(zh_common, 'nasdaq_futures')}",
 		"",
-		f"semi_score: {score_str}{redistr}  {trig} (≥{threshold})",
+		f"semi_score: {score_str}{redistr}",
+		dip_line,
 	])
 
 	# 종목별 섹션 (종목별 4신호 + 외인 5일)
@@ -173,21 +242,33 @@ def format_snapshot_message(output: dict, label: str,
 			f"  프로그램 순매수  {fmt_won(fr_t.get('program_net'))}  z={z_for(zh, 'program_net')}",
 			f"  외인 5일 누적    {fmt_won(fr_t.get('foreign_flow_5d'))}  z={z_for(zh, 'foreign_flow')}",
 		])
+		ti = trend_info.get(code, {})
+		if ti.get('ma60'):
+			updown = "위 ✅" if ti.get('uptrend') else "아래 ❌"
+			lines.append(
+				f"  60일선 {updown} (종가 {ti['close']:,.0f} / MA60 {ti['ma60']:,.0f})"
+			)
 
 	lines.append("\n📌 z 트렌드: 3일전/2일전/어제/오늘")
 	return "\n".join(lines)
 
 
-async def take_snapshot(token: Optional[str] = None, eval_date: str = '', label: str = 'manual',
+async def take_snapshot(token: Optional[str] = None, eval_date: str = '',
+                        label: str = 'manual',
                         db_path: Optional[str] = None,
                         json_path: Optional[str] = None,
                         send_telegram: bool = True) -> dict:
 	"""snapshot — DB write + 텔레그램 전송 + z 4일치 history 포함.
 
-	token: (하위호환 잔존 인자) 키움 미사용 — morning 파이프라인은 yfinance/DB만 씀.
+	token: 미지정 시 semi 전용 -XMf61 토큰 자체 발급 (GDLLsq 격리, 2026-07-21
+	       token_provider 참고). trend_info(60일선) 조회에만 사용 —
+	       morning pipeline은 키움 미사용(yfinance/DB).
 	"""
 	if not eval_date:
 		eval_date = resolve_eval_date(db_path=db_path)
+	if not token:
+		from .token_provider import get_semi_token
+		token = await get_semi_token()
 	logger.info(f"[snapshot] label={label} eval_date={eval_date}")
 	output = await run_pipeline_morning(
 		eval_date=eval_date,
@@ -214,6 +295,13 @@ async def take_snapshot(token: Optional[str] = None, eval_date: str = '', label:
 		logger.exception("[snapshot] us_memory 하위 fetch 실패")
 		output['us_memory_sub'] = {}
 
+	# 눌림 매수 후보용 추세 필터 (60일선)
+	try:
+		output['trend_info'] = await fetch_trend_info(token, eval_date)
+	except Exception:
+		logger.exception("[snapshot] trend_info fetch 실패")
+		output['trend_info'] = {}
+
 	if send_telegram:
 		from telegram.tel_send import tel_send
 		msg = format_snapshot_message(output, label, z_histories=z_histories)
@@ -225,16 +313,18 @@ async def take_snapshot(token: Optional[str] = None, eval_date: str = '', label:
 
 
 def resolve_eval_date(db_path: Optional[str] = None) -> Optional[str]:
-	"""가장 최근 정상 evening 완료 일자 자동 추출.
+	"""가장 최근 evening 완료 일자 자동 추출.
 
-	조건: us_memory + volume_amount 둘 다 있음 (evening + morning 완료).
-	morning만 호출된 row (us_mem 있고 종목별 4신호 None)는 제외.
+	조건: volume_amount 있음 (16:00 evening 수집 완료).
+	us_memory는 조건에서 제외 — 슬림 운영(2026-07)에서는 us 축을 채우는 주체가
+	snapshot의 morning pipeline 자신이라, us_memory까지 요구하면 최신 evening
+	행이 영원히 선택되지 못하고 과거 일자에 고착됨 (2026-07-20 발견 버그).
 	"""
 	from . import db as st_db
 	from .etf_mapping import TARGET_UNDERLYINGS
 	rows = st_db.fetch_recent_factors(TARGET_UNDERLYINGS[0], n=20, db_path=db_path)
 	for r in rows:
-		if r.get('us_memory') is not None and r.get('volume_amount') is not None:
+		if r.get('volume_amount') is not None:
 			return r.get('date')
 	# 폴백 — 정상 일자 없으면 가장 최근
 	return rows[0].get('date') if rows else None
