@@ -62,6 +62,7 @@ config/data/
 !automation/telegram/commands/token_manager.py
 !tests/test_token_manager.py
 !config-test/get_chat_id.py
+!automation/modules/semi_trigger/token_provider.py
 
 # PC 로컬 로그 모니터 도구 — Beelink와 무관, git 추적 불필요
 watch/

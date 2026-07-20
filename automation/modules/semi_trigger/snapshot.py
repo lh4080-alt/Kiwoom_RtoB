@@ -178,11 +178,16 @@ def format_snapshot_message(output: dict, label: str,
 	return "\n".join(lines)
 
 
-async def take_snapshot(token: str, eval_date: str, label: str = 'manual',
+async def take_snapshot(token: Optional[str] = None, eval_date: str = '', label: str = 'manual',
                         db_path: Optional[str] = None,
                         json_path: Optional[str] = None,
                         send_telegram: bool = True) -> dict:
-	"""snapshot — DB write + 텔레그램 전송 + z 4일치 history 포함."""
+	"""snapshot — DB write + 텔레그램 전송 + z 4일치 history 포함.
+
+	token: (하위호환 잔존 인자) 키움 미사용 — morning 파이프라인은 yfinance/DB만 씀.
+	"""
+	if not eval_date:
+		eval_date = resolve_eval_date(db_path=db_path)
 	logger.info(f"[snapshot] label={label} eval_date={eval_date}")
 	output = await run_pipeline_morning(
 		eval_date=eval_date,

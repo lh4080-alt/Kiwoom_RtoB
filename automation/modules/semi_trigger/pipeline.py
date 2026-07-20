@@ -92,7 +92,7 @@ def calc_axes_zscores(eval_date: str, stock_code: str, raw_factors: dict,
 	return z_values, baseline_days
 
 
-async def run_pipeline_evening(eval_date: str, token: str,
+async def run_pipeline_evening(eval_date: str, token: Optional[str] = None,
                                 db_path: Optional[str] = None) -> dict:
 	"""16:00 한국 마감 후 — etf_flow + foreign_flow_5d만 수집해서 DB 저장.
 
@@ -100,7 +100,8 @@ async def run_pipeline_evening(eval_date: str, token: str,
 
 	Args:
 		eval_date: YYYY-MM-DD
-		token: 키움 API 토큰
+		token: (하위호환 잔존 인자) 무시됨 — semi 전용 -XMf61 토큰을 자체 발급해
+		       사용한다 (GDLLsq 격리, token_provider 참고. 2026-07-21)
 
 	Returns: {
 	  '005930': {'etf_flow', 'foreign_flow_5d'},
@@ -110,14 +111,48 @@ async def run_pipeline_evening(eval_date: str, token: str,
 	base_dt = eval_date.replace('-', '')
 	logger.info(f"[pipeline_evening] start eval_date={eval_date}")
 
+	from .token_provider import get_semi_token
+	token = await get_semi_token()
+	if not token:
+		logger.error("[pipeline_evening] semi 토큰 발급 실패 — 수집 중단")
+		return {}
+
 	# foreign + 종목별 4 sub-signal 동시 수집 (etf_flow는 Lee 6/2 결정으로 제거)
-	ff_005930, ff_000660, sf_005930, sf_000660 = await asyncio.gather(
-		collect_foreign_flow_5d('005930', base_dt, token),
-		collect_foreign_flow_5d('000660', base_dt, token),
-		collect_stock_factors('005930', base_dt, token),
-		collect_stock_factors('000660', base_dt, token),
-		return_exceptions=False,
-	)
+	async def _collect_all(tk):
+		return await asyncio.gather(
+			collect_foreign_flow_5d('005930', base_dt, tk),
+			collect_foreign_flow_5d('000660', base_dt, tk),
+			collect_stock_factors('005930', base_dt, tk),
+			collect_stock_factors('000660', base_dt, tk),
+			return_exceptions=True,
+		)
+
+	def _ok(i, r):
+		if isinstance(r, Exception):
+			return False
+		if i < 2:  # foreign_flow: None=실패
+			return r is not None
+		# stock_factors: 전 필드 None이면 실패(토큰 무효 등)로 간주
+		return isinstance(r, dict) and any(v is not None for v in r.values())
+
+	results = await _collect_all(token)
+	if not all(_ok(i, r) for i, r in enumerate(results)):
+		# -XMf61 공유 풀 관례: 타 봇 재발급으로 내 토큰이 무효(8005)일 수 있음
+		# → force 재발급 후 전체 1회 재시도, 성공분은 기존 값 유지 (조회라 부작용 없음)
+		logger.warning("[pipeline_evening] 수집 실패 감지 — 토큰 재발급 후 1회 재시도 (8005 관례)")
+		token = await get_semi_token(force=True)
+		if token:
+			retry = await _collect_all(token)
+			results = [n if _ok(i, n) else o
+			           for i, (o, n) in enumerate(zip(results, retry))]
+
+	ff_005930, ff_000660, sf_005930, sf_000660 = [
+		None if isinstance(r, Exception) else r for r in results
+	]
+	if not isinstance(sf_005930, dict):
+		sf_005930 = {}
+	if not isinstance(sf_000660, dict):
+		sf_000660 = {}
 
 	out = {}
 	for stock_code in TARGET_UNDERLYINGS:
@@ -136,7 +171,8 @@ async def run_pipeline_evening(eval_date: str, token: str,
 	return out
 
 
-async def run_pipeline_morning(eval_date: str, token: str, mode: str = 'shadow',
+async def run_pipeline_morning(eval_date: str, token: Optional[str] = None,
+                                mode: str = 'shadow',
                                 threshold: float = DEFAULT_THRESHOLD,
                                 json_path: Optional[str] = None,
                                 db_path: Optional[str] = None) -> dict:
@@ -270,7 +306,7 @@ async def run_pipeline_morning(eval_date: str, token: str, mode: str = 'shadow',
 
 
 # 하위 호환 — 기존 run_pipeline 호출처는 morning 사용 (5축 한 번에 처리)
-async def run_pipeline(eval_date: str, token: str, mode: str = 'shadow',
+async def run_pipeline(eval_date: str, token: Optional[str] = None, mode: str = 'shadow',
                        threshold: float = DEFAULT_THRESHOLD,
                        json_path: Optional[str] = None,
                        db_path: Optional[str] = None) -> dict:
