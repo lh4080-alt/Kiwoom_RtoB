@@ -181,6 +181,14 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
     # 1) 국내 일봉 (반도체 + 기타 ETF)
     kr = await fetch_kr_daily_closes(token, today, SEMIS + OTHER_ETFS)
 
+    # 휴장 판정 — 대표 종목 최신 캔들이 오늘이 아니면 국내 휴장: 무음 스킵.
+    # (주말은 스케줄 자체가 없고, 평일 휴장일엔 에러 경고를 보내지 않는다.
+    #  그날 밤 미국 세션은 다음 거래일 행의 '전야'로 시차정렬에 자동 반영됨.)
+    samsung = kr.get('005930', {})
+    if samsung and max(samsung.keys()) < today:
+        logger.info(f"[macro] {today} 국내 휴장 (최신 캔들 {max(samsung.keys())}) — 스킵")
+        return {}
+
     # 2) 거시 (동기 → to_thread)
     macro = await asyncio.to_thread(fetch_macro_histories)
 

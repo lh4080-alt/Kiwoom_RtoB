@@ -28,6 +28,9 @@ async def run_daily(send_telegram: bool = True) -> int:
         await tel_send("⚠️ [macro] 토큰 발급 실패 — 수집 스킵")
         return 1
     record = await collect(token)
+    if not record:
+        print(f"[macro_once] 국내 휴장 — 스킵 {datetime.now().isoformat(timespec='seconds')}")
+        return 0
     missing = [k for k in ('semis_ret', 'others_ret', 'kospi_ret') if record.get(k) is None]
     if len(missing) == len(['semis_ret', 'others_ret', 'kospi_ret']):
         from telegram.tel_send import tel_send
