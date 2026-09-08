@@ -172,6 +172,62 @@ def rolling_corr(history: list, key_a: str, key_b: str, window: int = CORR_WINDO
     return pearson([p[0] for p in pairs[-window:]], [p[1] for p in pairs[-window:]])
 
 
+# ── 단기 흐름 판정 (표시 전용 — 2026-09-08 Lee 요청) ─────────
+# 3~7일 규모 단기 추세 라벨링. 방향=5거래일 누적(z 정규화), 지속=5일선/20일선 배열 일수.
+SHORT_WIN = 5          # 누적 등락 윈도 (거래일)
+SHORT_Z_TH = 0.5       # ±0.5σ 넘으면 흐름 있는 것으로 판정
+SHORT_SIGMA_LOOKBACK = 60
+
+
+def compute_short_term(kospi_closes: dict):
+    """단기 흐름 — 방향(5일 누적, 변동성 z) + 지속(5일선>20일선 배열 연속일수).
+
+    Returns: {'dir': '상승|중립|하락', 'ret5', 'z5', 'ma_state': bool,
+              'ma_days': int(배열 지속일수), 'ma_dir': str} or None.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return None
+    s = pd.Series(kospi_closes).sort_index()
+    if len(s) < SHORT_SIGMA_LOOKBACK + SHORT_WIN:
+        return None
+    close = float(s.iloc[-1])
+    base = float(s.iloc[-(SHORT_WIN + 1)])
+    if base <= 0:
+        return None
+    ret5 = (close / base - 1) * 100
+    r5 = s.pct_change(SHORT_WIN) * 100
+    sigma = float(r5.iloc[-SHORT_SIGMA_LOOKBACK:].std())
+    # 변동성이 비정상적으로 작으면(합성 데이터 등) z 계산 불가 → 중립 처리
+    z5 = (ret5 / sigma) if sigma and sigma >= 0.05 else None
+
+    if z5 is None:
+        dirn = '중립'
+    elif z5 >= SHORT_Z_TH:
+        dirn = '상승'
+    elif z5 <= -SHORT_Z_TH:
+        dirn = '하락'
+    else:
+        dirn = '중립'
+
+    ma5s = s.rolling(SHORT_WIN).mean()
+    ma20s = s.rolling(20).mean()
+    state = (ma5s > ma20s).dropna()
+    if state.empty:
+        return None
+    cur = bool(state.iloc[-1])
+    ma_days = 0
+    for v in state.iloc[::-1]:
+        if bool(v) == cur:
+            ma_days += 1
+        else:
+            break
+    return {'dir': dirn, 'ret5': round(ret5, 2),
+            'z5': round(z5, 2) if z5 is not None else None,
+            'ma_state': cur, 'ma_days': ma_days}
+
+
 # ── 국면 판정 (표시 전용 — 2026-09-08 Lee 승인 a안) ──────────
 # 3게이지 다수결. 임계값 전부 관행값(a priori) — 최적화 금지, 매매 근거 아님.
 # (근거: DCA 강도조절 백테스트 기각 2026-09-07 — 국면 라벨은 상황 인지 용도로만.)
@@ -285,8 +341,9 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
             kospi_r = (macro[SYM_KOSPI][cand] / macro[SYM_KOSPI][prev] - 1) * 100.0
             break
 
-    # 국면 판정 (표시 전용 — 같은 kospi 히스토리 재사용, 신규 호출 없음)
+    # 국면 + 단기 흐름 판정 (표시 전용 — 같은 kospi 히스토리 재사용, 신규 호출 없음)
     regime = compute_regime(macro.get(SYM_KOSPI, {}))
+    short_term = compute_short_term(macro.get(SYM_KOSPI, {}))
 
     record = {
         'date': today,
@@ -304,6 +361,7 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
         'usdkrw_ret': round(usd_r, 2) if usd_r is not None else None,
         'us10y': round(us10y, 2) if us10y is not None else None,
         'regime': regime,
+        'short_term': short_term,
     }
 
     # 5) 60일 상관 (히스토리 충분할 때만)
@@ -340,6 +398,15 @@ def format_report(record: dict) -> str:
             f"고점대비 {reg['dd']:+.1f}%{reg['dd_dir']} · "
             f"3개월 {mom_s}{reg['mom_dir']})"
         )
+
+    st = record.get('short_term')
+    if st:
+        z_s = f"{st['z5']:+.1f}σ" if st.get('z5') is not None else 'N/A'
+        ma_s = ('5일선>20일선' if st.get('ma_state') else '5일선<20일선') + f" {st['ma_days']}일째"
+        if st['dir'] == '중립':
+            lines.append(f"⚡ 단기: 중립 (5일 {st['ret5']:+.1f}%·{z_s} / {ma_s})")
+        else:
+            lines.append(f"⚡ 단기: {st['dir']} 흐름 (5일 {st['ret5']:+.1f}%·{z_s} / {ma_s})")
 
     semis_d = record.get('semis_detail') or {}
     parts = ' · '.join(f"{n} {pct(v)}" for n, v in semis_d.items())
