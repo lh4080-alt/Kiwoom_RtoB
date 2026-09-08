@@ -172,6 +172,55 @@ def rolling_corr(history: list, key_a: str, key_b: str, window: int = CORR_WINDO
     return pearson([p[0] for p in pairs[-window:]], [p[1] for p in pairs[-window:]])
 
 
+# ── 국면 판정 (표시 전용 — 2026-09-08 Lee 승인 a안) ──────────
+# 3게이지 다수결. 임계값 전부 관행값(a priori) — 최적화 금지, 매매 근거 아님.
+# (근거: DCA 강도조절 백테스트 기각 2026-09-07 — 국면 라벨은 상황 인지 용도로만.)
+REGIME_TREND_TH = -5.0     # 200일선 이격도: ≥0 ↑ / -5~0 → / <-5 ↓
+REGIME_DD_TH = (-10.0, -20.0)  # 52주 고점 대비: ≥-10 ↑ / -10~-20 → / ≤-20 ↓
+REGIME_MOM_TH = 5.0        # 3개월 수익률: ≥+5 ↑ / ±5 → / ≤-5 ↓
+
+
+def compute_regime(kospi_closes: dict):
+    """3게이지 국면 판정 — 추세(200일선 이격)·낙폭(52주 고점 대비)·모멘텀(3개월).
+
+    kospi_closes: {YYYY-MM-DD: close} (yfinance ^KS11, ~3년 — 200일선에 충분).
+    Returns: {'label', 'trend', 'dd', 'mom', 'trend_dir', 'dd_dir', 'mom_dir'} or None.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return None
+    s = pd.Series(kospi_closes).sort_index()
+    if len(s) < 250:
+        return None
+    close = float(s.iloc[-1])
+    ma200 = float(s.rolling(200).mean().iloc[-1])
+    if ma200 <= 0:
+        return None
+    trend = (close / ma200 - 1) * 100
+    hi250 = float(s.iloc[-250:].max())
+    dd = (close / hi250 - 1) * 100
+    mom = (close / float(s.iloc[-63]) - 1) * 100 if float(s.iloc[-63]) > 0 else None
+
+    t_dir = '↑' if trend >= 0 else ('→' if trend >= REGIME_TREND_TH else '↓')
+    d_dir = '↑' if dd >= REGIME_DD_TH[0] else ('→' if dd >= REGIME_DD_TH[1] else '↓')
+    if mom is None:
+        m_dir = '→'
+    else:
+        m_dir = '↑' if mom >= REGIME_MOM_TH else ('→' if mom >= -REGIME_MOM_TH else '↓')
+    ups = [t_dir, d_dir, m_dir].count('↑')
+    downs = [t_dir, d_dir, m_dir].count('↓')
+    if ups >= 2:
+        label = '강세장'
+    elif downs >= 2:
+        label = '하락장'
+    else:
+        label = '보합·전환기'
+    return {'label': label, 'trend': round(trend, 1), 'dd': round(dd, 1),
+            'mom': round(mom, 1) if mom is not None else None,
+            'trend_dir': t_dir, 'dd_dir': d_dir, 'mom_dir': m_dir}
+
+
 # ── 파이프라인 ───────────────────────────────────────────────
 async def run_daily(token: str, today_iso: str = None) -> dict:
     """당일 기록 생성 + 저장. today_iso=None이면 오늘."""
@@ -236,6 +285,9 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
             kospi_r = (macro[SYM_KOSPI][cand] / macro[SYM_KOSPI][prev] - 1) * 100.0
             break
 
+    # 국면 판정 (표시 전용 — 같은 kospi 히스토리 재사용, 신규 호출 없음)
+    regime = compute_regime(macro.get(SYM_KOSPI, {}))
+
     record = {
         'date': today,
         'generated_at': datetime.now().isoformat(timespec='seconds'),
@@ -251,6 +303,7 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
         'usdkrw': round(usd_prev, 2) if usd_prev is not None else None,
         'usdkrw_ret': round(usd_r, 2) if usd_r is not None else None,
         'us10y': round(us10y, 2) if us10y is not None else None,
+        'regime': regime,
     }
 
     # 5) 60일 상관 (히스토리 충분할 때만)
@@ -277,6 +330,16 @@ def format_report(record: dict) -> str:
     def pct(v):
         return 'N/A' if v is None else f"{v:+.2f}%"
     lines = [f"📊 [거시 모니터 {disp}] KOSPI {pct(record.get('kospi_ret'))}"]
+
+    reg = record.get('regime')
+    if reg:
+        mom_s = 'N/A' if reg.get('mom') is None else f"{reg['mom']:+.1f}%"
+        lines.append(
+            f"🏷 국면: {reg['label']} "
+            f"(추세 {reg['trend']:+.1f}%{reg['trend_dir']} · "
+            f"고점대비 {reg['dd']:+.1f}%{reg['dd_dir']} · "
+            f"3개월 {mom_s}{reg['mom_dir']})"
+        )
 
     semis_d = record.get('semis_detail') or {}
     parts = ' · '.join(f"{n} {pct(v)}" for n, v in semis_d.items())
