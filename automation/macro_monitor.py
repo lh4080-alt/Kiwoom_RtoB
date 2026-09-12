@@ -385,15 +385,32 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
 def format_report(record: dict) -> str:
     today = record['date']
     disp = f"{today[4:6]}-{today[6:]}"
+    history = load_history()
+    hist5 = history[-5:]  # 과거→오늘 5행 (오늘은 upsert 후 포함)
+
     def pct(v):
         return 'N/A' if v is None else f"{v:+.2f}%"
+
+    def seq(key, fmt):
+        """hist5의 key 값 시퀀스 (과거→오늘). 결측은 '-'."""
+        return ' / '.join('-' if r.get(key) is None else fmt(r.get(key)) for r in hist5)
+
+    f1 = lambda v: f"{v:+.1f}"
     lines = [f"📊 [거시 모니터 {disp}] KOSPI {pct(record.get('kospi_ret'))}"]
 
     reg = record.get('regime')
     if reg:
         mom_s = 'N/A' if reg.get('mom') is None else f"{reg['mom']:+.1f}%"
+        # 라벨 지속일수 (regime 기록이 있는 행부터)
+        dur = 0
+        for r in reversed(history):
+            if (r.get('regime') or {}).get('label') == reg.get('label'):
+                dur += 1
+            else:
+                break
+        dur_s = f" {dur}일째" if dur >= 1 else ''
         lines.append(
-            f"🏷 국면: {reg['label']} "
+            f"🏷 국면: {reg['label']}{dur_s} "
             f"(추세 {reg['trend']:+.1f}%{reg['trend_dir']} · "
             f"고점대비 {reg['dd']:+.1f}%{reg['dd_dir']} · "
             f"3개월 {mom_s}{reg['mom_dir']})"
@@ -410,65 +427,55 @@ def format_report(record: dict) -> str:
 
     semis_d = record.get('semis_detail') or {}
     parts = ' · '.join(f"{n} {pct(v)}" for n, v in semis_d.items())
-    lines.append("━━ 오늘 등락 ━━")
-    lines.append(f"🔺 반도체 블록    {pct(record.get('semis_ret'))}" + (f"  ({parts})" if parts else ""))
+    lines.append("━━ 오늘 등락 ━━ (5일 흐름: 과거→오늘)")
+    lines.append(f"🔺 반도체 블록 {pct(record.get('semis_ret'))}  "
+                 f"5일: {seq('semis_ret', f1)}" + (f"\n   ({parts})" if parts else ""))
     others_d = record.get('others_detail') or {}
     top = ' / '.join(f"{n} {pct(v)}" for n, v in list(others_d.items())[:4])
-    lines.append(f"🔹 기타 섹터      {pct(record.get('others_ret'))}  (13개 평균: {top} …)")
+    lines.append(f"🔹 기타 섹터 {pct(record.get('others_ret'))}  5일: {seq('others_ret', f1)}")
+    lines.append(f"   (13개 평균: {top} …)")
+    lines.append(f"   KOSPI {pct(record.get('kospi_ret'))}  5일: {seq('kospi_ret', f1)}")
 
     lines.append("━━ 회전 관찰 ━━")
     sp = record.get('rotation_spread')
     if sp is None:
         lines.append("🔄 스프레드 N/A (일부 데이터 결측)")
     else:
-        streak = _streak_desc(history=load_history(), today=today)
         if sp < 0:
-            lines.append(f"🔄 스프레드 {sp:+.2f}%p — 반도체→기타 이탈{streak}")
+            lines.append(f"🔄 스프레드 {sp:+.2f}%p — 반도체→기타 이탈")
         elif sp > 0:
-            lines.append(f"🔄 스프레드 {sp:+.2f}%p — 반도체 집중{streak}")
+            lines.append(f"🔄 스프레드 {sp:+.2f}%p — 반도체 집중")
         else:
             lines.append("🔄 스프레드 0.00%p — 균형")
-        history = load_history()
-        recent = [r.get('rotation_spread') for r in history[-6:-1]]
-        recent = [v for v in recent if v is not None]
-        if recent:
-            lines.append("   최근 5일: " + ' / '.join(f"{v:+.1f}" for v in recent))
+        lines.append(f"   최근 5일: {seq('rotation_spread', f1)} (과거→오늘)")
 
-    lines.append("━━ 전야 미국 (장 전 확정) ━━")
-    usd_s = f"{record.get('usdkrw'):,.0f}" if record.get('usdkrw') else 'N/A'
-    lines.append(f"🌐 나스닥F {pct(record.get('nq_overnight'))} | "
-                 f"달러 {usd_s} ({pct(record.get('usdkrw_ret'))}) | "
-                 f"미10Y {record.get('us10y') if record.get('us10y') is not None else 'N/A'}%")
+    lines.append("━━ 전야 미국 ━━ (5일 흐름: 과거→오늘)")
+    lines.append(f"🌐 나스닥F {pct(record.get('nq_overnight'))}  5일: {seq('nq_overnight', f1)}")
+    usd = record.get('usdkrw')
+    usd_s = f"{usd:,.0f}" if usd is not None else 'N/A'
+    lines.append(f"   달러 {usd_s}  5일: {seq('usdkrw', lambda v: f'{v:,.0f}')}")
+    us10 = record.get('us10y')
+    us10_s = f"{us10:.2f}%" if us10 is not None else 'N/A%'
+    lines.append(f"   미10Y {us10_s}  5일: {seq('us10y', lambda v: f'{v:.2f}')}")
 
-    corr = record.get('corr')
+    corr = record.get('corr') or (history[-1].get('corr') if history else None)
+    lines.append("━━ 상관 (60일, 괄호=20거래일 전 대비) ━━")
     if corr:
-        lines.append("━━ 상관 (60일) ━━")
-        def c(v):
-            return 'N/A' if v is None else f"{v:+.2f}"
-        lines.append(f"   KOSPI↔나스닥F {c(corr.get('kospi_nq'))} | "
-                     f"KOSPI↔달러 {c(corr.get('kospi_usd'))} | "
-                     f"반도체↔기타 {c(corr.get('semis_others'))} | "
-                     f"회전↔KOSPI {c(corr.get('rotation_kospi'))}")
+        prev = history[-21].get('corr') if len(history) >= 21 else None
+
+        def c(key):
+            now = corr.get(key)
+            if now is None:
+                return 'N/A'
+            if prev and prev.get(key) is not None:
+                old = prev[key]
+                d = abs(now) - abs(old)
+                word = '강화' if d >= 0.05 else ('약화' if d <= -0.05 else '유지')
+                return f"{now:+.2f} ({old:+.2f}→{word})"
+            return f"{now:+.2f}"
+
+        lines.append(f"   KOSPI↔나스닥F {c('kospi_nq')} | KOSPI↔달러 {c('kospi_usd')}")
+        lines.append(f"   반도체↔기타 {c('semis_others')} | 회전↔KOSPI {c('rotation_kospi')}")
     else:
-        lines.append("━━ 상관 (60일) ━━")
-        hist_len = len(load_history())
-        lines.append(f"   기록 {hist_len}일 — 60일({CORR_WINDOW - hist_len}일 후)부터 표시")
+        lines.append(f"   기록 {len(history)}일 — 60일({CORR_WINDOW - len(history)}일 후)부터 표시")
     return '\n'.join(lines)
-
-
-def _streak_desc(history: list, today: str) -> str:
-    """오늘 포함 스프레드 부호 연속 일수 → ' (N일 연속)' or ''. N>=2만 표시."""
-    sps = [r.get('rotation_spread') for r in history if r.get('rotation_spread') is not None]
-    if not sps:
-        return ''
-    sign = 1 if sps[-1] > 0 else (-1 if sps[-1] < 0 else 0)
-    n = 0
-    for v in reversed(sps):
-        s = 1 if v > 0 else (-1 if v < 0 else 0)
-        if s == sign:
-            n += 1
-        else:
-            break
-    if n < 2 or sign == 0:
-        return ''
-    return f" ({n}일 연속)"
