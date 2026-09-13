@@ -285,9 +285,31 @@ def compute_regime(kospi_closes: dict):
         label = '하락장'
     else:
         label = '보합·전환기'
+
+    # 고점대비·3개월의 현재 상태 — 10거래일 전 값 대비 변화로 판정 (±3%p, a priori)
+    #   반등 = 개선 / 바닥권 = 횡보 / 진행 = 악화
+    dd_chg = mom_chg = None
+    if len(s) >= 270:
+        dd_10 = (float(s.iloc[-11]) / float(s.iloc[-260:-10].max()) - 1) * 100
+        dd_chg = dd - dd_10
+        base10 = float(s.iloc[-73])
+        if base10 > 0 and mom is not None:
+            mom_chg = mom - ((float(s.iloc[-11]) / base10 - 1) * 100)
+
+    def _state(chg):
+        if chg is None:
+            return None
+        if chg >= 3:
+            return '반등'
+        if chg <= -3:
+            return '진행'
+        return '바닥권'
+
     return {'label': label, 'trend': round(trend, 1), 'dd': round(dd, 1),
             'mom': round(mom, 1) if mom is not None else None,
-            'trend_dir': t_dir, 'dd_dir': d_dir, 'mom_dir': m_dir}
+            'trend_dir': t_dir, 'dd_dir': d_dir, 'mom_dir': m_dir,
+            'dd_state': _state(dd_chg), 'dd_chg': round(dd_chg, 1) if dd_chg is not None else None,
+            'mom_state': _state(mom_chg), 'mom_chg': round(mom_chg, 1) if mom_chg is not None else None}
 
 
 # ── 파이프라인 ───────────────────────────────────────────────
@@ -424,10 +446,15 @@ def format_report(record: dict) -> str:
         dur_s = f" {dur}일째" if dur >= 1 else ''
         lines.append(
             f"🏷 국면: {reg['label']}{dur_s} "
-            f"(추세 {reg['trend']:+.1f}%{reg['trend_dir']} · "
+            f"(200일선 {reg['trend']:+.1f}%{reg['trend_dir']} · "
             f"고점대비 {reg['dd']:+.1f}%{reg['dd_dir']} · "
             f"3개월 {mom_s}{reg['mom_dir']})"
         )
+        if reg.get('dd_state'):
+            ms = reg.get('mom_state')
+            mom_chg_s = f" ({reg['mom_chg']:+.1f}%p)" if ms and reg.get('mom_chg') is not None else ''
+            lines.append(f"   ↳ 고점대비 {reg['dd_state']} (10일 {reg['dd_chg']:+.1f}%p)"
+                         + (f" · 3개월 {ms}{mom_chg_s}" if ms else ""))
 
     st = record.get('short_term')
     if st:
