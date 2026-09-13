@@ -159,11 +159,6 @@ def format_snapshot_message(output: dict, label: str,
 	nvda = fr.get('nvda')
 	legacy_avg = (sox + nvda) / 2.0 if (sox is not None and nvda is not None) else None
 
-	# 점수 정보 (모든 종목 동일하지만 첫 번째 사용)
-	semi_score = common.get('semi_score')
-	score_str = f"{semi_score:+.3f}" if semi_score is not None else "N/A"
-	redistr = " (가중재분배)" if common.get('weight_redistributed') else ""
-
 	# 눌림 매수 후보 판정 — 2단계 (2026-07-16 Lee 확정)
 	# 판정은 반도체 축만 사용, fx/nq는 표시 전용 (가중치 민감도 테스트: 희석 확인)
 	#   🛒🛒 강한 눌림: us_memory z ≤ -1.0
@@ -201,11 +196,8 @@ def format_snapshot_message(output: dict, label: str,
 		f"📊 [semi_trigger {output.get('date')} {label}]",
 		f"({output.get('generated_at', '')})",
 		"",
-		f"점수 가중: us_mem 50% / legacy(SOX·NVDA) 30% / fx 10% / nq 10%",
-		"",
-		"━━ 공통 4축 (점수 산출) ━━",
-		"",
-		f"① us_memory (50%)  {fmt_pct(fr.get('us_memory'))}  z={z_for(zh_common, 'us_memory')}",
+		# semi_score·가중치 줄 제거 (2026-09-14 Lee) — 판정 근거는 us_mem z 뿐, 점수는 표시 폐기
+		f"① <b>us_memory  {fmt_pct(fr.get('us_memory'))}</b>  z={z_for(zh_common, 'us_memory')}",
 	]
 	if us_mem_sub:
 		for sym in ('MU', 'WDC', 'SNDK', 'STX'):
@@ -213,14 +205,13 @@ def format_snapshot_message(output: dict, label: str,
 			lines.append(f"   ─ {sym:<4s} {fmt_pct(v)}")
 	lines.extend([
 		"",
-		f"② legacy(SOX·NVDA) (30%)  {fmt_pct(legacy_avg)}  z={z_for(zh_common, 'legacy_sox_nvda')}",
+		f"② legacy(SOX·NVDA)  {fmt_pct(legacy_avg)}  z={z_for(zh_common, 'legacy_sox_nvda')}",
 		f"   ─ SOX  {fmt_pct(sox)}",
 		f"   ─ NVDA {fmt_pct(nvda)}",
 		"",
-		f"③ fx_change (10%)  {fmt_pct(fr.get('fx_change'))}  z={z_for(zh_common, 'fx')}",
-		f"④ nasdaq_futures (10%)  {fmt_pct(fr.get('nasdaq_futures'))}  z={z_for(zh_common, 'nasdaq_futures')}",
+		f"③ fx_change  {fmt_pct(fr.get('fx_change'))}  z={z_for(zh_common, 'fx')}",
+		f"④ nasdaq_futures  {fmt_pct(fr.get('nasdaq_futures'))}  z={z_for(zh_common, 'nasdaq_futures')}",
 		"",
-		f"semi_score: {score_str}{redistr}",
 		dip_line,
 	])
 
@@ -306,7 +297,7 @@ async def take_snapshot(token: Optional[str] = None, eval_date: str = '',
 		from telegram.tel_send import tel_send
 		msg = format_snapshot_message(output, label, z_histories=z_histories)
 		try:
-			await tel_send(msg)
+			await tel_send(msg, parse_mode='HTML')
 		except Exception:
 			logger.exception("[snapshot] 텔레그램 전송 실패")
 	return output
