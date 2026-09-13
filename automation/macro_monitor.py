@@ -128,15 +128,28 @@ def overnight_session_return(us_closes: dict, kr_date: str) -> float:
 
 # ── 저장 / 조회 ──────────────────────────────────────────────
 def upsert_daily_record(record: dict, path: str = None):
-    """하루 1줄 원칙 — 같은 날짜 기존 줄 교체, 없으면 append. (재실행 안전)"""
+    """하루 1줄 원칙 — 같은 날짜는 병합(기존값 보존, null 아닌 신규값만 덮어씀), 없으면 append.
+
+    병합 이유: daily 실패분을 backfill로 소급 채울 때, 기존 행의 regime/short_term/corr
+    같은 후속 필드가 지워지지 않아야 함 (2026-09-13 9/12 실패분 복구에서 발견).
+    """
     path = path or JSONL_PATH
     os.makedirs(os.path.dirname(path), exist_ok=True)
     rows = []
     if os.path.exists(path):
         with open(path, encoding='utf-8') as f:
             rows = [json.loads(l) for l in f if l.strip()]
-    rows = [r for r in rows if r.get('date') != record['date']]
-    rows.append(record)
+    merged = None
+    for i, r in enumerate(rows):
+        if r.get('date') == record['date']:
+            merged = dict(r)
+            for k, v in record.items():
+                if v is not None:
+                    merged[k] = v
+            rows[i] = merged
+            break
+    if merged is None:
+        rows.append(record)
     rows.sort(key=lambda r: r['date'])
     tmp = path + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
