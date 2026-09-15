@@ -499,19 +499,30 @@ def format_report(record: dict) -> str:
     lines.append(f"   미10Y {us10_s}  5일: {seq('us10y', lambda v: f'{v:.2f}')}")
 
     corr = record.get('corr') or (history[-1].get('corr') if history else None)
-    lines.append("━━ 상관 (60일, 괄호=20거래일 전 대비) ━━")
+    # 비교 기준값: 20거래일 전 corr, 없으면 corr이 있는 가장 오래된 행 (기록 시작값)
+    base_corr, base_date = None, None
     if corr:
-        prev = history[-21].get('corr') if len(history) >= 21 else None
-
+        cand = history[-21] if len(history) >= 21 else None
+        if cand and cand.get('corr'):
+            base_corr, base_date = cand['corr'], cand['date']
+        else:
+            for r in history:
+                if r.get('corr'):
+                    base_corr, base_date = r['corr'], r['date']
+                    break
+    base_s = f", 괄호={base_date[4:6]}.{base_date[6:]} 기준 대비" if base_date else ''
+    lines.append(f"━━ 상관 (60일{base_s}) ━━")
+    if corr:
         def c(key):
             now = corr.get(key)
             if now is None:
                 return 'N/A'
-            if prev and prev.get(key) is not None:
-                old = prev[key]
+            if base_corr and base_corr.get(key) is not None:
+                old = base_corr[key]
                 d = abs(now) - abs(old)
                 word = '강화' if d >= 0.05 else ('약화' if d <= -0.05 else '유지')
-                return f"{now:+.2f} ({old:+.2f}→{word})"
+                return f"{now:+.2f} (기준 {old:+.2f} → {word})"
+            return f"{now:+.2f}"
             return f"{now:+.2f}"
 
         lines.append(f"   KOSPI↔나스닥F {c('kospi_nq')} | KOSPI↔달러 {c('kospi_usd')}")
