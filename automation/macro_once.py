@@ -39,6 +39,22 @@ async def run_daily(send_telegram: bool = True) -> int:
     if send_telegram:
         from telegram.tel_send import tel_send
         await tel_send(format_report(record))
+        # 대시보드 HTML 문서 첨부
+        try:
+            import httpx
+            dash_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     'tools', 'macro_dashboard.html')
+            if os.path.exists(dash_path):
+                tok = open(r'C:\market_data_collector\config\telegram_token.txt', encoding='utf-8-sig').read().strip()
+                chat = open(r'C:\market_data_collector\config\telegram_chat_id.txt', encoding='utf-8-sig').read().strip()
+                async with httpx.AsyncClient(timeout=30) as hc:
+                    with open(dash_path, 'rb') as f:
+                        r = await hc.post(
+                            f'https://api.telegram.org/bot{tok}/sendDocument',
+                            data={'chat_id': chat},
+                            files={'document': ('macro_dashboard.html', f, 'text/html')})
+        except Exception:
+            pass  # 대시보드 첨부 실패해도 리포트는 이미 발송됨
     print(f"[macro_once] daily 완료 {datetime.now().isoformat(timespec='seconds')} "
           f"missing={missing or 'none'}")
     return 0
