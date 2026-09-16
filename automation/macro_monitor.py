@@ -389,13 +389,49 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
     except Exception:
         logger.exception('[macro] breadth 지표 계산 실패')
 
-    # 외국인 시장 전체 순매수 (ka10058 일별×시장×외국인 — 종목별 합산 역산, 2026-09-16)
+    # 수급(외인·기관·개인, 백만원→억원) — ka10066 당일 종목별 스냅샷에서 추출
+    # 대상: 반도체 블록 3종 + 기타 13 섹터 ETF (총 16종목)
     foreign_net = None
+    flows = {}
     try:
-        from foreign_flow import fetch_foreign_market_net
-        foreign_net = await fetch_foreign_market_net(token, today)
+        from utils.rate_limiter import requests
+        rows66, cont66, nk66 = [], 'N', ''
+        for _page in range(40):
+            r66 = await requests.post(
+                config.get_host_url() + '/api/dostk/mrkcond',
+                headers={'Content-Type': 'application/json;charset=UTF-8',
+                         'authorization': f'Bearer {token}', 'cont-yn': cont66,
+                         'next-key': nk66, 'api-id': 'ka10066'},
+                json={'mrkt_tp': '001', 'amt_qty_tp': '1', 'trde_tp': '0',
+                      'stex_tp': '1'})
+            d66 = r66.json()
+            rows66.extend(d66.get('opaf_invsr_trde') or [])
+            cont66 = r66.headers.get('cont-yn', 'N')
+            nk66 = r66.headers.get('next-key', '')
+            if cont66 != 'Y':
+                break
+        want = {c for c, _ in SEMIS} | {c for c, _ in OTHER_ETFS}
+
+        def _beok(key, it):
+            s = str(it.get(key, '0')).replace('+', '')
+            if s.startswith('--'):
+                s = '-' + s[2:]
+            try:
+                return round(int(float(s)) / 100, 1)  # 백만원 → 억원
+            except (ValueError, TypeError):
+                return None
+
+        for it in rows66:
+            code = str(it.get('stk_cd', '')).strip()
+            if code not in want:
+                continue
+            flows[code] = {'frgnr': _beok('frgnr_invsr', it),
+                           'orgn': _beok('orgn', it),
+                           'ind': _beok('ind_invsr', it)}
+        # 시장 전체 외국인 순매수 합계 (억원)
+        foreign_net = round(sum((f.get('frgnr') or 0) for f in flows.values()), 1)
     except Exception:
-        logger.exception('[macro] 외국인 수집 실패')
+        logger.exception('[macro] ka10066 수급 수집 실패')
 
     record = {
         'date': today,
@@ -415,6 +451,7 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
         'regime': regime,
         'short_term': short_term,
         'breadth': breadth,
+        'flows': flows,
         'foreign_net_eok': foreign_net,
     }
 
@@ -510,6 +547,45 @@ def format_report(record: dict) -> str:
     lines.append(f"🔹 기타 섹터 {pct(record.get('others_ret'))}  5일: {seq('others_ret', f1)}")
     lines.append(f"   (13개 평균: {top} …)")
     lines.append(f"   KOSPI {pct(record.get('kospi_ret'))}  5일: {seq('kospi_ret', f1)}")
+
+    # 수급 흐름 (ka10066 당일 스냅샷 — 외인+기관 순매수, 백만원→억원)
+    flows_today = record.get('flows') or {}
+    if flows_today:
+        semi_codes = [c for c, _ in SEMIS]
+        other_codes = [c for c, _ in OTHER_ETFS]
+
+        def _net(fls, codes):
+            t = 0.0
+            for c in codes:
+                f = fls.get(c) or {}
+                t += (f.get('frgnr') or 0) + (f.get('orgn') or 0)
+            return t
+
+        def _net_days(codes, rows):
+            """rows 중 flows 기록된 행의 외인+기관 순매수 합계 (억원)."""
+            t = 0.0
+            for r in rows:
+                fl = r.get('flows') or {}
+                for c in codes:
+                    f = fl.get(c) or {}
+                    t += (f.get('frgnr') or 0) + (f.get('orgn') or 0)
+            return t
+
+        semi_today = _net(flows_today, semi_codes)
+        others_today = _net(flows_today, other_codes)
+        # 5일 누적 (flows 기록된 행만 합산 — 당일 포함 최근 5행)
+        semi5 = _net_days(semi_codes, history)
+        others5 = _net_days(other_codes, history)
+        lines.append(f"   💠 수급(외인+기관): 반도체블록 {semi_today:+,.0f}억 · "
+                     f"기타 {others_today:+,.0f}억 | 5일 누적: 반도체 {semi5:+,.0f}억 / "
+                     f"기타 {others5:+,.0f}억")
+        per5 = sorted(((name, _net_days([c], history)) for c, name in OTHER_ETFS),
+                      key=lambda t: -t[1])
+        if per5 and (abs(per5[0][1]) >= 3 or abs(per5[-1][1]) >= 3):
+            top_in, top_out = per5[0], per5[-1]
+            if top_in[0] != top_out[0]:
+                lines.append(f"   ↳ 두드러진 섹터: {top_in[0]} {top_in[1]:+,.0f}억 유입 · "
+                             f"{top_out[0]} {top_out[1]:+,.0f}억 이탈")
 
     lines.append("━━ 회전 관찰 ━━")
     sp = record.get('rotation_spread')
