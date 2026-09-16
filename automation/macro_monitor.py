@@ -545,6 +545,25 @@ def format_report(record: dict) -> str:
             adx = b['adx_14']
             word = '추세 약함' if adx < 20 else ('약한 추세' if adx <= 25 else '추세 뚜렷')
             adx_s = f" · ADX {adx:.0f} ({word})"
+    b = record.get('breadth') or {}
+    if b.get('atr14_pct') is not None:
+        pctile = b.get('atr14_pctile')
+        flag = ''
+        if pctile is not None and pctile >= 80:
+            flag = ' — 고변동'
+        pctile_s = f" (역내 {pctile:.0f}%ile)" if pctile is not None else ''
+        lines.append(f"   ↳ 변동성(ATR14) {b['atr14_pct']:.1f}%{pctile_s}{flag}")
+
+    st = record.get('short_term')
+    if st:
+        z_s = f"{st['z5']:+.1f}σ" if st.get('z5') is not None else 'N/A'
+        ma_s = ('5일선>20일선' if st.get('ma_state') else '5일선<20일선') + f" {st['ma_days']}일째"
+        b = record.get('breadth') or {}
+        adx_s = ''
+        if b.get('adx_14') is not None:
+            adx = b['adx_14']
+            word = '추세 약함' if adx < 20 else ('약한 추세' if adx <= 25 else '추세 뚜렷')
+            adx_s = f" · ADX {adx:.0f} ({word})"
         if st['dir'] == '중립':
             lines.append(f"⚡ 단기: 중립 (5일 {st['ret5']:+.1f}%·{z_s} / {ma_s}){adx_s}")
         else:
@@ -670,14 +689,6 @@ def format_report(record: dict) -> str:
     us10 = record.get('us10y')
     us10_s = f"{us10:.2f}%" if us10 is not None else 'N/A%'
     lines.append(f"   미10Y {us10_s}  5일: {seq('us10y', lambda v: f'{v:.2f}')}")
-    b = record.get('breadth') or {}
-    if b.get('atr14_pct') is not None:
-        pctile = b.get('atr14_pctile')
-        flag = ''
-        if pctile is not None and pctile >= 80:
-            flag = ' — 고변동'
-        pctile_s = f" (역내 {pctile:.0f}%ile)" if pctile is not None else ''
-        lines.append(f"   변동성(ATR14) {b['atr14_pct']:.1f}%{pctile_s}{flag}")
 
     corr = record.get('corr') or (history[-1].get('corr') if history else None)
     # 비교 기준값: 20거래일 전 corr, 없으면 corr이 있는 가장 오래된 행 (기록 시작값)
