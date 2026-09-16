@@ -601,6 +601,26 @@ def format_report(record: dict) -> str:
                 lines.append(f"   ↳ 두드러진 섹터: {top_in[0]} {top_in[1]:+,.0f}억 유입 · "
                              f"{top_out[0]} {top_out[1]:+,.0f}억 이탈")
 
+    # 외인 시장 전체 수급 z-score (ka10058 축적본, 지시서 6번)
+    fn_series = [r.get('foreign_net_eok') for r in history if r.get('foreign_net_eok') is not None]
+    if len(fn_series) >= 20:
+        def fz(n):
+            vals = fn_series[-n:]
+            if len(vals) < max(10, n // 2):
+                return None
+            m = sum(vals) / len(vals)
+            sd = (sum((v - m) ** 2 for v in vals) / len(vals)) ** 0.5
+            return (fn_series[-1] - m) / sd if sd > 0 else None
+
+        def zf(v):
+            return 'N/A' if v is None else f"{v:+.1f}σ"
+
+        z5v, z20v, z60v = fz(5), fz(20), fz(60)
+        trend_word = ''
+        if z5v is not None and z60v is not None and z5v != 0 and z60v != 0:
+            trend_word = ' · 추세 확정' if (z5v > 0) == (z60v > 0) else ' · 전환 구간'
+        lines.append(f"   외인 시장 수급: z5 {zf(z5v)} / z20 {zf(z20v)} / z60 {zf(z60v)}{trend_word}")
+
     lines.append("━━ 회전 관찰 ━━")
     sp = record.get('rotation_spread')
     if sp is None:
