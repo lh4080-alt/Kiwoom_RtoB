@@ -501,7 +501,8 @@ def format_report(record: dict) -> str:
         return ' / '.join('-' if r.get(key) is None else fmt(r.get(key)) for r in hist5)
 
     f1 = lambda v: f"{v:+.1f}"
-    lines = [f"📊 [거시 모니터 {disp}] KOSPI {pct(record.get('kospi_ret'))}"]
+    lines = [f"📊 [거시 모니터 {disp}] KOSPI {pct(record.get('kospi_ret'))}",
+             f"📈 대시보드: http://192.168.75.239:8080/macro_dashboard.html"]
 
     reg = record.get('regime')
     if reg:
