@@ -90,8 +90,12 @@ def snapshot(panel: pd.DataFrame, ohlc: pd.DataFrame, asof: str = None):
         a = float(ax['adx'].iloc[-1])
         out['adx_14'] = round(a, 1) if not pd.isna(a) else None
         c = float(close.iloc[-1])
-        out['atr14_pct'] = round(float(ax['atr'].iloc[-1]) / c * 100, 2) \
-            if c > 0 else None
+        atr_pct = float(ax['atr'].iloc[-1]) / c * 100 if c > 0 else None
+        out['atr14_pct'] = round(atr_pct, 2) if atr_pct is not None else None
+        # ATR% 백분위 — 가용 역사(350일) 전체 기준, 절대 임계치 없이 상대 판정
+        atr_s = (ax['atr'] / close * 100).dropna()
+        if len(atr_s) >= 30 and atr_pct is not None:
+            out['atr14_pctile'] = int(round(float((atr_s < atr_pct).mean() * 100), 0))
         out['kospi_last_date'] = str(close.index[-1].date())
     return out
 

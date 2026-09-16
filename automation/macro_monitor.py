@@ -389,39 +389,13 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
     except Exception:
         logger.exception('[macro] breadth 지표 계산 실패')
 
-    # 외국인 시장 전체 순매수 (ka10066, 당일 스냅샷 — 9/15부터 축적 시작)
+    # 외국인 시장 전체 순매수 (ka10058 일별×시장×외국인 — 종목별 합산 역산, 2026-09-16)
     foreign_net = None
     try:
-        import utils.config as config
-        from utils.rate_limiter import requests
-        rows, cont, nk = [], 'N', ''
-        for _page in range(30):
-            r = await requests.post(
-                config.get_host_url() + '/api/dostk/mrkcond',
-                headers={'Content-Type': 'application/json;charset=UTF-8',
-                         'authorization': f'Bearer {token}', 'cont-yn': cont,
-                         'next-key': nk, 'api-id': 'ka10066'},
-                json={'mrkt_tp': '001', 'amt_qty_tp': '1', 'trde_tp': '0',
-                      'stex_tp': '1'})
-            d = r.json()
-            body = d.get('opaf_invsr_trde') or []
-            rows.extend(body)
-            cont = r.headers.get('cont-yn', 'N')
-            nk = r.headers.get('next-key', '')
-            if cont != 'Y':
-                break
-        total = 0
-        for it in rows:
-            s = str(it.get('frgnr_invsr', '0')).replace('+', '')
-            if s.startswith('--'):
-                s = '-' + s[2:]
-            try:
-                total += int(float(s))
-            except (ValueError, TypeError):
-                pass
-        foreign_net = round(total / 1e8, 1)  # 억원
+        from foreign_flow import fetch_foreign_market_net
+        foreign_net = await fetch_foreign_market_net(token, today)
     except Exception:
-        logger.exception('[macro] ka10066 수집 실패')
+        logger.exception('[macro] 외국인 수집 실패')
 
     record = {
         'date': today,
@@ -554,9 +528,29 @@ def format_report(record: dict) -> str:
     if b.get('ad_line') is not None:
         lines.append(f"   A/D: 상승 {b.get('advancers', '-')} / 하락 {b.get('decliners', '-')}"
                      f" · 라인 변화 {b.get('ad_change_1d', 0):+d} (누적 {b['ad_line']:+d})")
+    # 외인 시장 수급: 당일 값 + z5/z20/z60 (ka10058 축적본, 2026-09-16 지시서 6번)
     fn = record.get('foreign_net_eok')
     if fn is not None:
-        lines.append(f"   외인 시장 순매수 {fn:+,.0f}억 (z 축적중)")
+        fvals = [r.get('foreign_net_eok') for r in history
+                 if r.get('foreign_net_eok') is not None]
+
+        def fz(n):
+            vals = fvals[-n:]
+            if len(vals) < max(10, n // 2):
+                return None
+            m = sum(vals) / len(vals)
+            sd = (sum((v - m) ** 2 for v in vals) / len(vals)) ** 0.5
+            return (fn - m) / sd if sd > 0 else None
+
+        def zf(v):
+            return 'N/A' if v is None else f"{v:+.1f}σ"
+
+        z5, z20, z60 = fz(5), fz(20), fz(60)
+        trend_word = ''
+        if z5 is not None and z60 is not None and z5 != 0 and z60 != 0:
+            trend_word = ' · 추세 확정' if (z5 > 0) == (z60 > 0) else ' · 전환 구간'
+        lines.append(f"   외인 시장 순매수 {fn:+,.0f}억 "
+                     f"(z5 {zf(z5)} / z20 {zf(z20)} / z60 {zf(z60)}){trend_word}")
 
     lines.append("━━ 전야 미국 ━━ (5일 흐름: 과거→오늘)")
     lines.append(f"🌐 나스닥F {pct(record.get('nq_overnight'))}  5일: {seq('nq_overnight', f1)}")
@@ -568,8 +562,12 @@ def format_report(record: dict) -> str:
     lines.append(f"   미10Y {us10_s}  5일: {seq('us10y', lambda v: f'{v:.2f}')}")
     b = record.get('breadth') or {}
     if b.get('atr14_pct') is not None:
-        lines.append(f"   변동성(ATR14) {b['atr14_pct']:.1f}%"
-                     + (" — 고변동" if b['atr14_pct'] >= 3.0 else ""))
+        pctile = b.get('atr14_pctile')
+        flag = ''
+        if pctile is not None and pctile >= 80:
+            flag = ' — 고변동'
+        pctile_s = f" (역내 {pctile:.0f}%ile)" if pctile is not None else ''
+        lines.append(f"   변동성(ATR14) {b['atr14_pct']:.1f}%{pctile_s}{flag}")
 
     corr = record.get('corr') or (history[-1].get('corr') if history else None)
     # 비교 기준값: 20거래일 전 corr, 없으면 corr이 있는 가장 오래된 행 (기록 시작값)
