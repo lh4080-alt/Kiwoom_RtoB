@@ -380,6 +380,49 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
     regime = compute_regime(macro.get(SYM_KOSPI, {}))
     short_term = compute_short_term(macro.get(SYM_KOSPI, {}))
 
+    # 시장 폭 확장 지표 (2026-09-15 지시서 — 표시 전용, MDC 일봉 패널 기반)
+    breadth = {}
+    try:
+        import market_breadth as mb
+        panel, ohlc = mb._load()
+        breadth = mb.snapshot(panel, ohlc)
+    except Exception:
+        logger.exception('[macro] breadth 지표 계산 실패')
+
+    # 외국인 시장 전체 순매수 (ka10066, 당일 스냅샷 — 9/15부터 축적 시작)
+    foreign_net = None
+    try:
+        import utils.config as config
+        from utils.rate_limiter import requests
+        rows, cont, nk = [], 'N', ''
+        for _page in range(30):
+            r = await requests.post(
+                config.get_host_url() + '/api/dostk/mrkcond',
+                headers={'Content-Type': 'application/json;charset=UTF-8',
+                         'authorization': f'Bearer {token}', 'cont-yn': cont,
+                         'next-key': nk, 'api-id': 'ka10066'},
+                json={'mrkt_tp': '001', 'amt_qty_tp': '1', 'trde_tp': '0',
+                      'stex_tp': '1'})
+            d = r.json()
+            body = d.get('opaf_invsr_trde') or []
+            rows.extend(body)
+            cont = r.headers.get('cont-yn', 'N')
+            nk = r.headers.get('next-key', '')
+            if cont != 'Y':
+                break
+        total = 0
+        for it in rows:
+            s = str(it.get('frgnr_invsr', '0')).replace('+', '')
+            if s.startswith('--'):
+                s = '-' + s[2:]
+            try:
+                total += int(float(s))
+            except (ValueError, TypeError):
+                pass
+        foreign_net = round(total / 1e8, 1)  # 억원
+    except Exception:
+        logger.exception('[macro] ka10066 수집 실패')
+
     record = {
         'date': today,
         'generated_at': datetime.now().isoformat(timespec='seconds'),
@@ -397,6 +440,8 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
         'us10y': round(us10y, 2) if us10y is not None else None,
         'regime': regime,
         'short_term': short_term,
+        'breadth': breadth,
+        'foreign_net_eok': foreign_net,
     }
 
     # 5) 60일 상관 (히스토리 충분할 때만)
@@ -455,15 +500,31 @@ def format_report(record: dict) -> str:
             mom_chg_s = f" ({reg['mom_chg']:+.1f}%p)" if ms and reg.get('mom_chg') is not None else ''
             lines.append(f"   ↳ 고점대비 {reg['dd_state']} (10일 {reg['dd_chg']:+.1f}%p)"
                          + (f" · 3개월 {ms}{mom_chg_s}" if ms else ""))
+        # 교차검증: 전종목 200일선 위 비율 + 200일선 기울기 (2026-09-15 지시서 4번)
+        b = record.get('breadth') or {}
+        if b.get('pct_above_ma200') is not None:
+            slope_s = ''
+            if b.get('ma200_slope_20d') is not None:
+                slope_s = f" · 기울기 {b['ma200_slope_20d']:+.1f}%"
+                if b.get('ma200_slope_20d_prev') is not None:
+                    slope_s += f" (20일전 {b['ma200_slope_20d_prev']:+.1f}%)"
+            lines.append(f"   ↳ 200일선 위 종목 {b['pct_above_ma200']:.0f}%{slope_s}")
 
     st = record.get('short_term')
     if st:
         z_s = f"{st['z5']:+.1f}σ" if st.get('z5') is not None else 'N/A'
         ma_s = ('5일선>20일선' if st.get('ma_state') else '5일선<20일선') + f" {st['ma_days']}일째"
+        b = record.get('breadth') or {}
+        adx_s = ''
+        if b.get('adx_14') is not None:
+            adx = b['adx_14']
+            word = '추세 약함' if adx < 20 else ('약한 추세' if adx <= 25 else '추세 뚜렷')
+            adx_s = f" · ADX {adx:.0f} ({word})"
         if st['dir'] == '중립':
-            lines.append(f"⚡ 단기: 중립 (5일 {st['ret5']:+.1f}%·{z_s} / {ma_s})")
+            lines.append(f"⚡ 단기: 중립 (5일 {st['ret5']:+.1f}%·{z_s} / {ma_s}){adx_s}")
         else:
-            lines.append(f"⚡ 단기: {st['dir']} 흐름 (5일 {st['ret5']:+.1f}%·{z_s} / {ma_s})")
+            band = '약한 ' if abs(st.get('z5') or 0) < 0.8 else ''
+            lines.append(f"⚡ 단기: {band}{st['dir']} 흐름 (5일 {st['ret5']:+.1f}%·{z_s} / {ma_s}){adx_s}")
 
     semis_d = record.get('semis_detail') or {}
     parts = ' · '.join(f"{n} {pct(v)}" for n, v in semis_d.items())
@@ -488,6 +549,14 @@ def format_report(record: dict) -> str:
         else:
             lines.append("🔄 스프레드 0.00%p — 균형")
         lines.append(f"   최근 5일: {seq('rotation_spread', f1)} (과거→오늘)")
+    # 시장 폭: A/D 라인 (2026-09-15 지시서 3번 — 회전과 병렬 배치)
+    b = record.get('breadth') or {}
+    if b.get('ad_line') is not None:
+        lines.append(f"   A/D: 상승 {b.get('advancers', '-')} / 하락 {b.get('decliners', '-')}"
+                     f" · 라인 변화 {b.get('ad_change_1d', 0):+d} (누적 {b['ad_line']:+d})")
+    fn = record.get('foreign_net_eok')
+    if fn is not None:
+        lines.append(f"   외인 시장 순매수 {fn:+,.0f}억 (z 축적중)")
 
     lines.append("━━ 전야 미국 ━━ (5일 흐름: 과거→오늘)")
     lines.append(f"🌐 나스닥F {pct(record.get('nq_overnight'))}  5일: {seq('nq_overnight', f1)}")
@@ -497,6 +566,10 @@ def format_report(record: dict) -> str:
     us10 = record.get('us10y')
     us10_s = f"{us10:.2f}%" if us10 is not None else 'N/A%'
     lines.append(f"   미10Y {us10_s}  5일: {seq('us10y', lambda v: f'{v:.2f}')}")
+    b = record.get('breadth') or {}
+    if b.get('atr14_pct') is not None:
+        lines.append(f"   변동성(ATR14) {b['atr14_pct']:.1f}%"
+                     + (" — 고변동" if b['atr14_pct'] >= 3.0 else ""))
 
     corr = record.get('corr') or (history[-1].get('corr') if history else None)
     # 비교 기준값: 20거래일 전 corr, 없으면 corr이 있는 가장 오래된 행 (기록 시작값)
