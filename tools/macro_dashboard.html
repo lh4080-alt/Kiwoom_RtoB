@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>거시 모니터 대시보드</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Malgun Gothic', sans-serif; background: #1a1a2e; color: #eee; padding: 16px; }
+.header { text-align: center; margin-bottom: 20px; }
+.header h1 { font-size: 1.4em; color: #64b5f6; }
+.summary { background: #0d1b2a; border-radius: 8px; padding: 16px; margin-bottom: 16px; max-width: 1400px; margin-left: auto; margin-right: auto; border: 1px solid #2a2a4a; }
+.summary h2 { font-size: 1.1em; color: #64b5f6; margin-bottom: 8px; }
+.summary .row { display: flex; flex-wrap: wrap; gap: 12px; }
+.summary .item { background: #16213e; padding: 8px 12px; border-radius: 6px; min-width: 120px; }
+.summary .item .label { font-size: 0.7em; color: #90a4ae; }
+.summary .item .val { font-size: 1.1em; font-weight: bold; }
+.pos { color: #ef5350; }
+.neg { color: #26a69a; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 1400px; margin: 0 auto; }
+.chart-box { background: #16213e; border-radius: 8px; padding: 12px; border: 1px solid #2a2a4a; }
+.chart-box h3 { font-size: 0.9em; color: #90caf9; margin-bottom: 8px; }
+.chart-wrap { position: relative; height: 260px; }
+.values { margin-top: 8px; font-size: 0.8em; color: #b0bec5; line-height: 1.5; }
+.full-width { grid-column: 1 / -1; }
+@media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="header"><h1>📊 거시 모니터 대시보드</h1></div>
+<div class="summary" id="summary"></div>
+<div class="grid">
+  <div class="chart-box full-width"><h3>📈 코스피 지수 vs 200일선</h3><div class="chart-wrap" style="height:300px"><canvas id="chKospi"></canvas></div><div class="values" id="vKospi"></div></div>
+  <div class="chart-box"><h3>⚡ 단기: 5일 등락률 (반도체 vs 기타, %)</h3><div class="chart-wrap" style="height:200px"><canvas id="chShort"></canvas></div><div class="values" id="vShort"></div></div>
+  <div class="chart-box"><h3>🔄 회전 스프레드 (%p)</h3><div class="chart-wrap" style="height:200px"><canvas id="chRot"></canvas></div><div class="values" id="vRot"></div></div>
+  <div class="chart-box"><h3>📊 A/D 누적 라인</h3><div class="chart-wrap" style="height:200px"><canvas id="chAD"></canvas></div><div class="values" id="vAD"></div></div>
+  <div class="chart-box"><h3>🌐 외국인 시장 순매수 (억원)</h3><div class="chart-wrap" style="height:200px"><canvas id="chFn"></canvas></div><div class="values" id="vFn"></div></div>
+  <div class="chart-box"><h3>📊 변동성 ATR(14)% + ADX(14)</h3><div class="chart-wrap" style="height:200px"><canvas id="chVol"></canvas></div><div class="values" id="vVol"></div></div>
+  <div class="chart-box full-width"><h3>📊 200일선 위 종목 비율 (%)</h3><div class="chart-wrap" style="height:160px"><canvas id="chPct"></canvas></div><div class="values" id="vPct"></div></div>
+</div>
+<script>
+const D = {"dates": ["06-23", "06-24", "06-25", "06-26", "06-29", "06-30", "07-01", "07-02", "07-03", "07-06", "07-07", "07-08", "07-09", "07-10", "07-13", "07-14", "07-15", "07-16", "07-20", "07-21", "07-22", "07-23", "07-24", "07-27", "07-28", "07-29", "07-30", "07-31", "08-03", "08-04", "08-05", "08-06", "08-07", "08-10", "08-11", "08-12", "08-13", "08-14", "08-18", "08-19", "08-20", "08-21", "08-24", "08-25", "08-26", "08-27", "08-28", "08-31", "09-01", "09-02", "09-03", "09-04", "09-07", "09-08", "09-09", "09-10", "09-11", "09-14", "09-15", "09-16"], "kospi": [8203.84, 8471.02, 8930.3, 8411.21, 8394.65, 8476.48, 8303.41, 7648.09, 8088.34, 8051.33, 7656.31, 7246.79, 7291.91, 7475.94, 6806.93, 6856.83, 7284.41, 6820.6, 6516.27, 6747.95, 6797.7, 7096.89, 6690.62, 6755.75, 6023.66, 5663.24, 5593.56, 6595.45, 6257.45, 6358.95, 6598.26, 6296.38, 6258.77, 6299.66, 6345.53, 6579.04, 6813.34, 6977.94, 6869.83, 6471.17, 6852.58, 6912.95, 6696.96, 6742.74, 6808.21, 6912.37, 6788.88, 6820.02, 6835.8, 6562.72, 6579.48, 6687.21, 6995.39, 6954.52, 7051.64, 7033.92, 6909.91, 6684.37, 6627.26, 6717.97], "ma200": [5083.0, 5109.3, 5138.0, 5164.3, 5190.7, 5217.3, 5243.0, 5265.2, 5289.7, 5314.1, 5336.4, 5356.7, 5377.4, 5398.9, 5417.0, 5435.3, 5455.7, 5473.7, 5490.0, 5507.2, 5524.4, 5542.9, 5559.4, 5575.9, 5588.9, 5600.0, 5610.7, 5626.3, 5640.2, 5654.6, 5670.3, 5684.8, 5698.9, 5713.3, 5727.8, 5742.9, 5758.9, 5775.9, 5792.4, 5806.5, 5822.0, 5837.9, 5852.3, 5866.9, 5881.5, 5896.8, 5911.1, 5924.9, 5939.1, 5951.5, 5963.9, 5976.8, 5990.7, 6004.9, 6020.1, 6035.1, 6049.9, 6063.0, 6075.6, 6088.4], "adx": [23.4, 21.9, 21.5, 20.0, 18.7, 17.6, 16.4, 16.2, 16.4, 16.2, 16.7, 17.4, 18.3, 18.7, 20.0, 21.6, 21.9, 22.7, 23.7, 24.7, 24.8, 24.9, 25.3, 25.9, 27.1, 28.9, 30.7, 30.6, 30.5, 30.6, 30.0, 29.9, 29.9, 29.9, 30.0, 29.2, 28.0, 26.5, 24.6, 23.7, 22.2, 20.6, 19.4, 18.8, 17.9, 16.8, 15.9, 15.6, 15.3, 15.4, 15.7, 15.9, 15.1, 14.2, 13.3, 12.5, 12.0, 12.0, 12.2, 12.5], "atr_pct": [5.39, 5.27, 5.1, 5.71, 5.65, 5.57, 5.69, 6.38, 6.27, 6.31, 6.77, 7.24, 7.15, 6.87, 7.79, 7.74, 7.32, 7.84, 8.0, 7.6, 7.45, 6.94, 7.31, 6.99, 8.18, 9.3, 9.29, 8.44, 8.68, 8.28, 7.75, 7.95, 7.72, 7.31, 6.95, 6.58, 6.23, 5.85, 5.96, 6.4, 6.06, 5.8, 5.83, 5.74, 5.47, 5.19, 5.05, 4.95, 4.72, 4.87, 4.77, 4.54, 4.34, 4.28, 4.08, 3.98, 4.0, 4.11, 3.99, 3.78], "semi_ret": [-12.43, 1.92, 12.04, -7.97, -2.01, 1.17, -3.6, -13.95, 10.45, -2.72, -6.16, -5.76, 4.71, 0.13, -14.72, 3.62, 8.55, -11.16, -4.3, 4.29, -0.25, 4.69, -8.26, 3.05, -14.48, -9.07, -5.02, 29.49, -8.72, 0.62, 5.32, -9.77, -4.18, -0.07, 0.89, 5.65, 5.73, 3.11, 0.57, -9.39, 12.14, 2.42, -4.1, 0.43, 0.73, 2.39, -4.28, 1.26, 0.99, -4.58, -0.96, 3.07, 7.86, 0.45, 3.06, -0.15, -2.41, -6.72, 1.57, 2.57], "others_ret": [-6.82, 0.89, -1.22, -5.81, 7.7, -1.41, 3.79, -2.35, 0.73, -0.42, -4.25, -6.27, -1.68, 4.9, -3.93, -2.82, 4.4, -1.1, -5.15, 1.02, 1.69, 7.04, -3.35, -1.35, -7.28, -6.77, 1.0, 8.8, -0.5, 5.11, 4.34, -0.74, 0.93, 3.36, -2.25, 1.25, 0.66, 1.13, -2.52, -2.05, 0.29, -4.0, 1.36, 1.81, 1.0, 2.47, 0.04, -1.91, -1.0, -4.44, 1.31, 0.59, 2.57, -1.29, 2.32, -0.4, -0.32, -0.89, -2.24, -0.83], "ad_cum": [-1588, -940, -1645, -4349, -1685, -1920, -609, -2247, -1298, -1810, -3222, -5967, -6376, -3622, -6076, -7824, -5322, -6530, -9380, -8491, -7916, -5674, -7747, -6546, -9561, -12343, -12740, -9833, -9293, -6396, -3917, -4455, -4359, -1920, -1269, -911, -784, 398, -1750, -3924, -2584, -4688, -4308, -2533, -1494, -1267, -933, -1583, -1935, -4439, -4836, -3150, -2968, -4266, -3856, -4135, -5184, -6170, -6260, -6585], "pct_above": [35.5, 36.0, 34.8, 32.6, 36.6, 36.3, 37.8, 36.0, 36.6, 36.3, 35.2, 33.5, 32.9, 34.8, 33.5, 31.9, 33.9, 33.0, 30.6, 31.4, 31.8, 33.4, 31.6, 32.0, 27.4, 24.4, 23.3, 28.5, 28.5, 31.1, 33.6, 33.0, 33.3, 35.4, 36.2, 36.7, 36.9, 38.4, 36.5, 33.8, 34.6, 32.7, 33.0, 34.3, 35.1, 35.5, 36.0, 35.2, 35.2, 31.8, 31.9, 33.3, 33.5, 33.0, 33.4, 33.2, 32.5, 31.7, 31.8, 31.5], "foreign_dates": ["20260623", "20260624", "20260625", "20260626", "20260629", "20260630", "20260701", "20260702", "20260703", "20260706", "20260707", "20260708", "20260709", "20260710", "20260713", "20260714", "20260715", "20260716", "20260720", "20260721", "20260722", "20260723", "20260724", "20260727", "20260728", "20260729", "20260730", "20260731", "20260803", "20260804", "20260805", "20260806", "20260807", "20260810", "20260811", "20260812", "20260813", "20260814", "20260818", "20260819", "20260820", "20260821", "20260824", "20260825", "20260826", "20260827", "20260828", "20260831", "20260901", "20260902", "20260903", "20260904", "20260907", "20260908", "20260909", "20260910", "20260911", "20260914", "20260915", "20260916"], "foreign_vals": [1518.5, 1041.1, 1876.0, 1344.8, 891.5, 939.9, 922.1, 989.5, 1020.3, 432.1, 1054.0, 1712.0, 1510.6, 1708.4, 894.6, 2296.6, 2830.4, 773.8, 1675.7, 1348.9, 2944.5, 2786.3, 703.6, 446.9, 684.8, 1378.4, 1877.9, 7903.4, 763.5, 948.1, 2035.5, 466.5, 599.1, 659.1, 1157.5, 3473.6, 2703.5, 3721.0, 1695.3, 568.3, 2653.1, 1031.1, 736.4, 673.7, 1246.9, 1314.7, 725.3, 641.3, 662.2, 478.3, 1150.5, 1609.8, 3275.5, 1747.9, 1085.6, 1723.6, 784.9, 578.3, 693.7, 460.2], "rot_dates": ["20260624", "20260625", "20260626", "20260629", "20260630", "20260701", "20260702", "20260703", "20260706", "20260707", "20260708", "20260709", "20260710", "20260713", "20260714", "20260715", "20260716", "20260720", "20260721", "20260722", "20260723", "20260724", "20260727", "20260728", "20260729", "20260730", "20260731", "20260803", "20260804", "20260805", "20260806", "20260807", "20260810", "20260811", "20260812", "20260813", "20260814", "20260818", "20260819", "20260820", "20260821", "20260824", "20260825", "20260826", "20260827", "20260828", "20260831", "20260901", "20260902", "20260903", "20260904", "20260907", "20260908", "20260909", "20260910", "20260911", "20260914", "20260915", "20260916", "20260917"], "rot_vals": [2.37, 7.24, 0.34, -9.85, 4.94, -5.1, -10.01, 5.14, -1.95, -3.43, -1.06, 5.64, -0.72, -7.11, 5.71, 4.64, -8.4, -0.96, 2.56, -2.3, -2.88, -5.29, 2.88, -6.87, -2.34, -5.39, 20.19, -6.01, -3.08, 0.58, -6.75, -3.41, 0.15, 3.44, 3.49, 4.22, 0.82, 2.44, -4.85, 7.61, 3.48, -5.65, 0.16, -0.32, 0.63, -3.75, 2.35, 0.86, 1.0, -2.69, 2.7, 4.13, 1.07, 0.37, 0.56, -3.36, -3.75, 1.51, 3.48, 0.04], "current": {"kospi": 6717.97, "ma200": 6088.4, "disparity": 10.3, "slope": 4.9, "slope_prev": 5.4, "dd": -26.3, "adx": 12.5, "atr_pct": 3.78, "pct_above": 31.5, "ad_change": -325, "semi5": -5.1, "others5": -4.7, "rotation5": -0.5}};
+const c = D.current;
+
+document.getElementById('summary').innerHTML = `
+<h2>📌 현재 상태</h2>
+<div class="row">
+  <div class="item"><div class="label">KOSPI</div><div class="val">${c.kospi.toLocaleString()}</div></div>
+  <div class="item"><div class="label">200일선 대비</div><div class="val ${c.disparity>=0?'pos':'neg'}">${c.disparity>=0?'+':''}${c.disparity}%</div></div>
+  <div class="item"><div class="label">고점대비</div><div class="val neg">${c.dd}%</div></div>
+  <div class="item"><div class="label">200일선 기울기</div><div class="val ${c.slope>=0?'pos':'neg'}">${c.slope>=0?'+':''}${c.slope}%</div></div>
+  <div class="item"><div class="label">ADX</div><div class="val">${c.adx}</div></div>
+  <div class="item"><div class="label">ATR 변동성</div><div class="val">${c.atr_pct}%</div></div>
+  <div class="item"><div class="label">200일선 위 종목</div><div class="val">${c.pct_above}%</div></div>
+  <div class="item"><div class="label">A/D 당일</div><div class="val ${c.ad_change>=0?'pos':'neg'}">${c.ad_change>0?'+':''}${c.ad_change}</div></div>
+</div>`;
+
+Chart.defaults.color = '#90a4ae';
+Chart.defaults.borderColor = '#2a2a4a';
+const grid = { drawBorder: false, color: 'rgba(255,255,255,0.05)' };
+const noLegend = { legend: { display: false } };
+
+new Chart(document.getElementById('chKospi'), { type: 'line',
+  data: { labels: D.dates, datasets: [
+    { label: '코스피', data: D.kospi, borderColor: '#64b5f6', borderWidth: 2, pointRadius: 0, tension: 0.3 },
+    { label: '200일선', data: D.ma200, borderColor: '#ffb74d', borderWidth: 1.5, borderDash: [5,5], pointRadius: 0, tension: 0.3 }
+  ]},
+  options: { responsive: true, maintainAspectRatio: false, scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 15 } }, y: { grid } } }
+});
+
+new Chart(document.getElementById('chShort'), { type: 'bar',
+  data: { labels: D.dates.slice(-20), datasets: [
+    { label: '반도체 블록', data: D.semi_ret.slice(-20), backgroundColor: 'rgba(239,83,80,0.7)' },
+    { label: '기타 섹터', data: D.others_ret.slice(-20), backgroundColor: 'rgba(38,166,154,0.7)' }
+  ]},
+  options: { responsive: true, maintainAspectRatio: false, scales: { x: { grid: { display: false } }, y: { grid, title: { display: true, text: '%' } } } }
+});
+
+const rotLabels = D.rot_dates.map(d => d.slice(4));
+new Chart(document.getElementById('chRot'), { type: 'bar',
+  data: { labels: rotLabels, datasets: [{ data: D.rot_vals,
+    backgroundColor: D.rot_vals.map(v => v >= 0 ? 'rgba(239,83,80,0.7)' : 'rgba(38,166,154,0.7)') }]},
+  options: { responsive: true, maintainAspectRatio: false, plugins: noLegend,
+    scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 15 } }, y: { grid, title: { display: true, text: '%p' } } } }
+});
+
+new Chart(document.getElementById('chAD'), { type: 'line',
+  data: { labels: D.dates, datasets: [{ data: D.ad_cum, borderColor: '#ab47bc', borderWidth: 2, pointRadius: 0, tension: 0.3, fill: true, backgroundColor: 'rgba(171,71,188,0.1)' }]},
+  options: { responsive: true, maintainAspectRatio: false, plugins: noLegend,
+    scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 15 } }, y: { grid } } }
+});
+
+const fnLabels = D.foreign_dates.map(d => d.slice(4));
+new Chart(document.getElementById('chFn'), { type: 'bar',
+  data: { labels: fnLabels, datasets: [{ data: D.foreign_vals,
+    backgroundColor: D.foreign_vals.map(v => v >= 0 ? 'rgba(239,83,80,0.7)' : 'rgba(38,166,154,0.7)') }]},
+  options: { responsive: true, maintainAspectRatio: false, plugins: noLegend,
+    scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 15 } }, y: { grid, title: { display: true, text: '억원' } } } }
+});
+
+new Chart(document.getElementById('chVol'), { type: 'line',
+  data: { labels: D.dates, datasets: [
+    { label: 'ATR(14) %', data: D.atr_pct, borderColor: '#ef5350', borderWidth: 2, pointRadius: 0, tension: 0.3, yAxisID: 'y' },
+    { label: 'ADX(14)', data: D.adx, borderColor: '#42a5f5', borderWidth: 2, pointRadius: 0, tension: 0.3, yAxisID: 'y1' }
+  ]},
+  options: { responsive: true, maintainAspectRatio: false,
+    scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 15 } },
+      y: { grid, title: { display: true, text: 'ATR %' }, position: 'left' },
+      y1: { grid: { display: false }, title: { display: true, text: 'ADX' }, position: 'right' } },
+    plugins: { legend: { position: 'top' } } }
+});
+
+new Chart(document.getElementById('chPct'), { type: 'line',
+  data: { labels: D.dates, datasets: [{ data: D.pct_above, borderColor: '#66bb6a', borderWidth: 2, pointRadius: 0, tension: 0.3, fill: true, backgroundColor: 'rgba(102,187,106,0.1)' }]},
+  options: { responsive: true, maintainAspectRatio: false, plugins: noLegend,
+    scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 15 } }, y: { grid, min: 0, max: 100 } } }
+});
+</script>
+</body>
+</html>
