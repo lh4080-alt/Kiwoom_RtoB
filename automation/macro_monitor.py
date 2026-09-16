@@ -457,7 +457,6 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
 
     # 외국인 수급 T+1 보완 — 어제 행의 foreign_net이 비어 있으면 ka10058로 재조회해서 채운다
     try:
-        from datetime import timedelta
         yesterday = (datetime.strptime(today, '%Y%m%d') - timedelta(days=1)).strftime('%Y%m%d')
         y_row = next((r for r in load_history() if r['date'] == yesterday), None)
         if y_row is not None and y_row.get('foreign_net_eok') is None:
