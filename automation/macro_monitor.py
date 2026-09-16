@@ -455,6 +455,21 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
         'foreign_net_eok': foreign_net,
     }
 
+    # 외국인 수급 T+1 보완 — 어제 행의 foreign_net이 비어 있으면 ka10058로 재조회해서 채운다
+    try:
+        from datetime import timedelta
+        yesterday = (datetime.strptime(today, '%Y%m%d') - timedelta(days=1)).strftime('%Y%m%d')
+        y_row = next((r for r in load_history() if r['date'] == yesterday), None)
+        if y_row is not None and y_row.get('foreign_net_eok') is None:
+            from foreign_flow import fetch_foreign_market_net
+            y_net = await fetch_foreign_market_net(token, yesterday)
+            if y_net is not None:
+                y_row['foreign_net_eok'] = y_net
+                upsert_daily_record(y_row)
+                logger.info(f"[macro] 전일({yesterday}) 외국인 수급 보완: {y_net:+,.0f}억")
+    except Exception:
+        logger.exception('[macro] 전일 외국인 보완 실패')
+
     # 5) 60일 상관 (히스토리 충분할 때만)
     upsert_daily_record(record)
     history = load_history()
