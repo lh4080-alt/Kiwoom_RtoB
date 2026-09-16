@@ -226,6 +226,7 @@ def compute_short_term(kospi_closes: dict):
 
     ma5s = s.rolling(SHORT_WIN).mean()
     ma20s = s.rolling(20).mean()
+    ma60s = s.rolling(60).mean()
     state = (ma5s > ma20s).dropna()
     if state.empty:
         return None
@@ -236,9 +237,11 @@ def compute_short_term(kospi_closes: dict):
             ma_days += 1
         else:
             break
+    ma20_gt_ma60 = bool(ma20s.iloc[-1] > ma60s.iloc[-1]) if not pd.isna(ma20s.iloc[-1]) and not pd.isna(ma60s.iloc[-1]) else None
     return {'dir': dirn, 'ret5': round(ret5, 2),
             'z5': round(z5, 2) if z5 is not None else None,
-            'ma_state': cur, 'ma_days': ma_days}
+            'ma_state': cur, 'ma_days': ma_days,
+            'ma20_gt_ma60': ma20_gt_ma60}
 
 
 # ── 국면 판정 (표시 전용 — 2026-09-08 Lee 승인 a안) ──────────
@@ -309,7 +312,32 @@ def compute_regime(kospi_closes: dict):
             'mom': round(mom, 1) if mom is not None else None,
             'trend_dir': t_dir, 'dd_dir': d_dir, 'mom_dir': m_dir,
             'dd_state': _state(dd_chg), 'dd_chg': round(dd_chg, 1) if dd_chg is not None else None,
-            'mom_state': _state(mom_chg), 'mom_chg': round(mom_chg, 1) if mom_chg is not None else None}
+            'mom_state': _state(mom_chg), 'mom_chg': round(mom_chg, 1) if mom_chg is not None else None,
+            # 반등 전환 감지 (2026-09-16 Lee 요청) — 하락장 라벨 유지 중에도
+            # 저점 대비 반등 + 단기 상승 전환이 동시 충족되면 표시
+            'reversal_detect': _reversal_detect(s)}
+
+def _reversal_detect(s):
+    """하락장 중 반등 전환 감지 — 표시 전용.
+
+    조건 (둘 다 충족):
+      ① 20거래일 최저점 대비 +10% 이상 상승 (V자 반등 확연)
+      ② 5일선 > 20일선 (단기 상승 전환)
+    Returns: {'rebound_pct': float, 'short_cross': bool} or None.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        return None
+    if len(s) < 250:
+        return None
+    close = float(s.iloc[-1])
+    low20 = float(s.iloc[-20:].min())
+    rebound = (close / low20 - 1) * 100 if low20 > 0 else 0
+    ma5 = float(s.rolling(5).mean().iloc[-1])
+    ma20 = float(s.rolling(20).mean().iloc[-1])
+    cross = ma5 > ma20
+    return {'rebound_pct': round(rebound, 1), 'short_cross': cross}
 
 
 # ── 파이프라인 ───────────────────────────────────────────────
@@ -526,6 +554,13 @@ def format_report(record: dict) -> str:
             mom_chg_s = f" ({reg['mom_chg']:+.1f}%p)" if ms and reg.get('mom_chg') is not None else ''
             lines.append(f"   ↳ 고점대비 {reg['dd_state']} (10일 {reg['dd_chg']:+.1f}%p)"
                          + (f" · 3개월 {ms}{mom_chg_s}" if ms else ""))
+        # 반등 전환 감지
+        rv = reg.get('reversal_detect')
+        if rv and rv.get('rebound_pct') is not None:
+            rb = rv['rebound_pct']
+            cross_s = '5일선>20일선 ✓' if rv.get('short_cross') else '5일선<20일선'
+            if rb >= 10:
+                lines.append(f"   ↳ 🔄 반등 전환 감지: 저점 대비 {rb:+.1f}% · {cross_s}")
         # 교차검증: 전종목 200일선 위 비율 + 200일선 기울기 (2026-09-15 지시서 4번)
         b = record.get('breadth') or {}
         if b.get('pct_above_ma200') is not None:
@@ -570,6 +605,11 @@ def format_report(record: dict) -> str:
         else:
             band = '약한 ' if abs(st.get('z5') or 0) < 0.8 else ''
             lines.append(f"⚡ 단기: {band}{st['dir']} 흐름 (5일 {st['ret5']:+.1f}%·{z_s} / {ma_s}){adx_s}")
+        # 20일선 vs 60일선 — 중기 추세 방향 확인 (단기 5일선과 함께 읽으면 추세 신뢰도 상승)
+        ma20v60 = st.get('ma20_gt_ma60')
+        if ma20v60 is not None:
+            m60_s = '20일선>60일선 ✓' if ma20v60 else '20일선<60일선'
+            lines.append(f"   ↳ 중기 추세: {m60_s}")
 
     semis_d = record.get('semis_detail') or {}
     parts = ' · '.join(f"{n} {pct(v)}" for n, v in semis_d.items())
