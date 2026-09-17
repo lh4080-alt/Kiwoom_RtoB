@@ -541,7 +541,8 @@ def format_report(record: dict) -> str:
 
     f1 = lambda v: f"{v:+.1f}"
     lines = [f"📊 [거시 모니터 {disp}] KOSPI {pct(record.get('kospi_ret'))}",
-             f"📈 대시보드: http://192.168.75.239:8080/macro_dashboard.html"]
+             f"📈 대시보드: http://192.168.75.239:8080/macro_dashboard.html",
+             f"📈 코스피 차트: https://stock.naver.com/domestic/index/KOSPI/price"]
 
     reg = record.get('regime')
     if reg:
