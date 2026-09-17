@@ -601,9 +601,15 @@ def format_report(record: dict) -> str:
             dd5_s = f" / 5일전 대비 {dd5:+.1f}%p" if dd5 is not None else ''
             lines.append(f"   ↳ 고점대비 {reg['dd_state']} (10일전 대비 {reg['dd_chg']:+.1f}%p{dd5_s})")
             if reg.get('mom_state') and reg.get('mom_chg') is not None:
+                mom_v = reg.get('mom')
                 m5 = reg.get('mom_chg_5d')
-                m5_s = f" / 5일전 대비 {m5:+.1f}%p" if m5 is not None else ''
-                lines.append(f"   ↳ 3개월 {reg['mom_state']} (10일전 대비 {reg['mom_chg']:+.1f}%p{m5_s})")
+                m5_s = ''
+                if m5 is not None and mom_v is not None:
+                    m5_s = f" (5거래일전 {mom_v - m5:+.1f}% / 현재대비 {m5:+.1f}%p)"
+                m10_v = (mom_v - reg['mom_chg']) if mom_v is not None else None
+                m10_s = f"{m10_v:+.1f}%" if m10_v is not None else 'N/A'
+                lines.append(f"   ↳ 3개월 {reg['mom_state']} 현재 {mom_v:+.1f}% "
+                             f"(10거래일전 {m10_s} / 현재대비 {reg['mom_chg']:+.1f}%p){m5_s}")
         # 반등 전환 감지
         rv = reg.get('reversal_detect')
         if rv and rv.get('rebound_pct') is not None:
