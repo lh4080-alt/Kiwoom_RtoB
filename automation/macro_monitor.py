@@ -551,8 +551,8 @@ def format_report(record: dict) -> str:
         )
         if reg.get('dd_state'):
             ms = reg.get('mom_state')
-            mom_chg_s = f" ({reg['mom_chg']:+.1f}%p)" if ms and reg.get('mom_chg') is not None else ''
-            lines.append(f"   ↳ 고점대비 {reg['dd_state']} (10일 {reg['dd_chg']:+.1f}%p)"
+            mom_chg_s = f" (10일전 대비 {reg['mom_chg']:+.1f}%p)" if ms and reg.get('mom_chg') is not None else ''
+            lines.append(f"   ↳ 고점대비 {reg['dd_state']} (10일전 대비 {reg['dd_chg']:+.1f}%p)"
                          + (f" · 3개월 {ms}{mom_chg_s}" if ms else ""))
         # 반등 전환 감지
         rv = reg.get('reversal_detect')
