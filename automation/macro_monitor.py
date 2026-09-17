@@ -617,55 +617,56 @@ def format_report(record: dict) -> str:
             cross_s = '5일선>20일선 ✓' if rv.get('short_cross') else '5일선<20일선'
             if rb >= 10:
                 lines.append(f"   ↳ 🔄 반등 전환 감지: 저점 대비 {rb:+.1f}% · {cross_s}")
-        # 교차검증: 전종목 200일선 위 비율 + 200일선 기울기 (2026-09-15 지시서 4번)
-        b = record.get('breadth') or {}
+
+    # 단기 흐름 + 부가 환경 지표 (2026-09-17 Lee 배치 — 방향 → 폭 → 변동성/추세강도 → 구조)
+    st = record.get('short_term')
+    b = record.get('breadth') or {}
+
+    def _breadth_lines():
+        out = []
         if b.get('pct_above_ma200') is not None:
             slope_s = ''
             if b.get('ma200_slope_20d') is not None:
                 slope_s = f" · 기울기 {b['ma200_slope_20d']:+.1f}%"
                 if b.get('ma200_slope_20d_prev') is not None:
                     slope_s += f" (20일전 {b['ma200_slope_20d_prev']:+.1f}%)"
-            lines.append(f"   ↳ 200일선 위 종목 {b['pct_above_ma200']:.0f}%{slope_s}")
-
-    st = record.get('short_term')
-    if st:
-        z_s = f"{st['z5']:+.1f}σ" if st.get('z5') is not None else 'N/A'
-        ma_s = ('5일선>20일선' if st.get('ma_state') else '5일선<20일선') + f" {st['ma_days']}일째"
-        b = record.get('breadth') or {}
-        adx_s = ''
+            out.append(f"   ↳ 200일선 위 종목 {b['pct_above_ma200']:.0f}%{slope_s}")
+        env_s = ''
+        if b.get('atr14_pct') is not None:
+            pctile = b.get('atr14_pctile')
+            flag = ' — 고변동' if pctile is not None and pctile >= 80 else ''
+            pctile_s = f" (역내 {pctile:.0f}%ile)" if pctile is not None else ''
+            env_s = f"변동성(ATR14) {b['atr14_pct']:.1f}%{pctile_s}{flag}"
         if b.get('adx_14') is not None:
             adx = b['adx_14']
             word = '추세 약함' if adx < 20 else ('약한 추세' if adx <= 25 else '추세 뚜렷')
-            adx_s = f" · ADX {adx:.0f} ({word})"
-    b = record.get('breadth') or {}
-    if b.get('atr14_pct') is not None:
-        pctile = b.get('atr14_pctile')
-        flag = ''
-        if pctile is not None and pctile >= 80:
-            flag = ' — 고변동'
-        pctile_s = f" (역내 {pctile:.0f}%ile)" if pctile is not None else ''
-        lines.append(f"   ↳ 변동성(ATR14) {b['atr14_pct']:.1f}%{pctile_s}{flag}")
+            env_s += f" · ADX {adx:.0f} ({word})" if env_s else f"ADX {adx:.0f} ({word})"
+        if env_s:
+            out.append(f"   ↳ {env_s}")
+        return out
 
-    st = record.get('short_term')
     if st:
         z_s = f"{st['z5']:+.1f}σ" if st.get('z5') is not None else 'N/A'
         ma_s = ('5일선>20일선' if st.get('ma_state') else '5일선<20일선') + f" {st['ma_days']}일째"
-        b = record.get('breadth') or {}
-        adx_s = ''
-        if b.get('adx_14') is not None:
-            adx = b['adx_14']
-            word = '추세 약함' if adx < 20 else ('약한 추세' if adx <= 25 else '추세 뚜렷')
-            adx_s = f" · ADX {adx:.0f} ({word})"
         if st['dir'] == '중립':
-            lines.append(f"⚡ 단기: 중립 (5일 {st['ret5']:+.1f}%·{z_s} / {ma_s}){adx_s}")
+            lines.append(f"⚡ 단기: 중립 (5일 {st['ret5']:+.1f}%·{z_s} / {ma_s})")
         else:
             band = '약한 ' if abs(st.get('z5') or 0) < 0.8 else ''
-            lines.append(f"⚡ 단기: {band}{st['dir']} 흐름 (5일 {st['ret5']:+.1f}%·{z_s} / {ma_s}){adx_s}")
-        # 20일선 vs 60일선 — 중기 추세 방향 확인 (단기 5일선과 함께 읽으면 추세 신뢰도 상승)
+            lines.append(f"⚡ 단기: {band}{st['dir']} 흐름 (5일 {st['ret5']:+.1f}%·{z_s} / {ma_s})")
+        lines.extend(_breadth_lines())
+        # 이평선 배열 — 단기(5 vs 20)와 중기(20 vs 60) 조합 표시
         ma20v60 = st.get('ma20_gt_ma60')
         if ma20v60 is not None:
-            m60_s = '20일선>60일선 ✓' if ma20v60 else '20일선<60일선'
-            lines.append(f"   ↳ 중기 추세: {m60_s}")
+            m5 = '>' if st.get('ma_state') else '<'
+            m20 = '>' if ma20v60 else '<'
+            if m5 != m20:
+                arr_s = f"5일선{m5}20일선 · 20일선{m20}60일선 (혼조)"
+            else:
+                arr_s = (f"5일선{m5}20일선{m20}60일선 "
+                         f"({'상승' if m5 == '>' else '하락'} 정배열)")
+            lines.append(f"   ↳ 이평선 배열: {arr_s}")
+    else:
+        lines.extend(_breadth_lines())
 
     semis_d = record.get('semis_detail') or {}
     parts = ' · '.join(f"{n} {pct(v)}" for n, v in semis_d.items())
