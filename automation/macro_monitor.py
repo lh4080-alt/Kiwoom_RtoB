@@ -434,6 +434,7 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
     flows = {}
     try:
         from utils.rate_limiter import requests
+        import utils.config as config
         rows66, cont66, nk66 = [], 'N', ''
         for _page in range(40):
             r66 = await requests.post(
