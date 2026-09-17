@@ -78,6 +78,37 @@ async def fetch_kr_daily_closes(token: str, base_dt: str, codes: list) -> dict:
     return out
 
 
+async def fetch_kospi_index_closes(token: str, base_dt: str, min_bars: int = 300) -> dict:
+    """코스피 지수 일봉 (ka20006 업종일봉, inds_cd='001') → {YYYY-MM-DD: 종가}.
+
+    yfinance ^KS11 대체 (2026-09-17 Lee 결정: 국내는 전부 키움) — yfinance는
+    최신 봉이 하루 밀려 국면 계산이 어제 종가 기준이 되는 문제가 있었다.
+    cur_prc는 소수점 제거 100배 값 (예: 3254.42 → 325442) → /100.
+    """
+    from utils.rate_limiter import requests
+    import utils.config as config
+    closes = {}
+    cont, nk = 'N', ''
+    for _page in range(6):
+        r = await requests.post(
+            config.get_host_url() + '/api/dostk/chart',
+            headers={'Content-Type': 'application/json;charset=UTF-8',
+                     'authorization': f'Bearer {token}', 'cont-yn': cont,
+                     'next-key': nk, 'api-id': 'ka20006'},
+            json={'inds_cd': '001', 'base_dt': base_dt})
+        d = r.json()
+        for it in d.get('inds_dt_pole_qry') or []:
+            s = str(it.get('cur_prc', '')).strip().lstrip('-')
+            dt = str(it.get('dt', ''))
+            if s and len(dt) == 8:
+                closes[f'{dt[:4]}-{dt[4:6]}-{dt[6:]}'] = int(s) / 100.0
+        cont = r.headers.get('cont-yn', 'N')
+        nk = r.headers.get('next-key', '')
+        if cont != 'Y' or len(closes) >= min_bars:
+            break
+    return closes
+
+
 def _daily_returns(closes: dict) -> dict:
     """{date(YYYYMMDD): close} → {date: ret_pct} (date ASC). 전일 대비 %."""
     dates = sorted(closes.keys())
@@ -368,6 +399,9 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
         logger.info(f"[macro] {today} 국내 휴장 (최신 캔들 {max(samsung.keys())}) — 스킵")
         return {}
 
+    # 1-1) 코스피 지수 일봉 (ka20006 — 국내 소스 키움 통일, yfinance 시차 해소)
+    kospi_closes = await fetch_kospi_index_closes(token, today)
+
     # 2) 거시 (동기 → to_thread)
     macro = await asyncio.to_thread(fetch_macro_histories)
 
@@ -411,13 +445,13 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
     for back in range(0, 7):
         cand = (d - timedelta(days=back)).strftime('%Y-%m-%d')
         prev = (d - timedelta(days=back + 1)).strftime('%Y-%m-%d')
-        if cand in macro.get(SYM_KOSPI, {}) and prev in macro.get(SYM_KOSPI, {}):
-            kospi_r = (macro[SYM_KOSPI][cand] / macro[SYM_KOSPI][prev] - 1) * 100.0
+        if cand in kospi_closes and prev in kospi_closes:
+            kospi_r = (kospi_closes[cand] / kospi_closes[prev] - 1) * 100.0
             break
 
     # 국면 + 단기 흐름 판정 (표시 전용 — 같은 kospi 히스토리 재사용, 신규 호출 없음)
-    regime = compute_regime(macro.get(SYM_KOSPI, {}))
-    short_term = compute_short_term(macro.get(SYM_KOSPI, {}))
+    regime = compute_regime(kospi_closes)
+    short_term = compute_short_term(kospi_closes)
 
     # 시장 폭 확장 지표 (2026-09-15 지시서 — 표시 전용, MDC 일봉 패널 기반)
     breadth = {}
