@@ -299,6 +299,15 @@ def compute_regime(kospi_closes: dict):
         if base10 > 0 and mom is not None:
             mom_chg = mom - ((float(s.iloc[-11]) / base10 - 1) * 100)
 
+    # 5거래일 전 대비 — 흐름의 단기 가속/둔화 확인용 (표시 전용, 판정은 10일 기준)
+    dd_chg5 = mom_chg5 = None
+    if len(s) >= 265:
+        dd_5 = (float(s.iloc[-6]) / float(s.iloc[-255:-5].max()) - 1) * 100
+        dd_chg5 = dd - dd_5
+        base5 = float(s.iloc[-68])
+        if base5 > 0 and mom is not None:
+            mom_chg5 = mom - ((float(s.iloc[-6]) / base5 - 1) * 100)
+
     def _state(chg):
         if chg is None:
             return None
@@ -313,6 +322,8 @@ def compute_regime(kospi_closes: dict):
             'trend_dir': t_dir, 'dd_dir': d_dir, 'mom_dir': m_dir,
             'dd_state': _state(dd_chg), 'dd_chg': round(dd_chg, 1) if dd_chg is not None else None,
             'mom_state': _state(mom_chg), 'mom_chg': round(mom_chg, 1) if mom_chg is not None else None,
+            'dd_chg_5d': round(dd_chg5, 1) if dd_chg5 is not None else None,
+            'mom_chg_5d': round(mom_chg5, 1) if mom_chg5 is not None else None,
             # 반등 전환 감지 (2026-09-16 Lee 요청) — 하락장 라벨 유지 중에도
             # 저점 대비 반등 + 단기 상승 전환이 동시 충족되면 표시
             'reversal_detect': _reversal_detect(s)}
@@ -550,10 +561,13 @@ def format_report(record: dict) -> str:
             f"3개월 {mom_s}{reg['mom_dir']})"
         )
         if reg.get('dd_state'):
-            ms = reg.get('mom_state')
-            mom_chg_s = f" (10일전 대비 {reg['mom_chg']:+.1f}%p)" if ms and reg.get('mom_chg') is not None else ''
-            lines.append(f"   ↳ 고점대비 {reg['dd_state']} (10일전 대비 {reg['dd_chg']:+.1f}%p)"
-                         + (f" · 3개월 {ms}{mom_chg_s}" if ms else ""))
+            dd5 = reg.get('dd_chg_5d')
+            dd5_s = f" / 5일전 대비 {dd5:+.1f}%p" if dd5 is not None else ''
+            lines.append(f"   ↳ 고점대비 {reg['dd_state']} (10일전 대비 {reg['dd_chg']:+.1f}%p{dd5_s})")
+            if reg.get('mom_state') and reg.get('mom_chg') is not None:
+                m5 = reg.get('mom_chg_5d')
+                m5_s = f" / 5일전 대비 {m5:+.1f}%p" if m5 is not None else ''
+                lines.append(f"   ↳ 3개월 {reg['mom_state']} (10일전 대비 {reg['mom_chg']:+.1f}%p{m5_s})")
         # 반등 전환 감지
         rv = reg.get('reversal_detect')
         if rv and rv.get('rebound_pct') is not None:
