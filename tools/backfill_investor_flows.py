@@ -49,8 +49,9 @@ async def fetch_day(token, d):
     for it in data.get('inds_netprps') or []:
         cd = str(it.get('inds_cd', ''))
         if cd.rstrip('_AL').rstrip('_NX') == '001':
-            # 백만원 → 억원
-            return {out: round(_num(it.get(src)) / 100, 1) for src, out in FIELDS.items()}
+            # 천만원 → 억원 (실측 확정 2026-10-06: 전 투자자 합=0 정합 + 자릿수 검증.
+            # 예: 9/29 외인 raw -29,944 → -2,994억. PDF 미명시라 실측으로 확정)
+            return {out: round(_num(it.get(src)) / 10, 1) for src, out in FIELDS.items()}
     return None
 
 
