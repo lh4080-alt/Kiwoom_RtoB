@@ -500,8 +500,10 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
             flows[code] = {'frgnr': _beok('frgnr_invsr', it),
                            'orgn': _beok('orgn', it),
                            'ind': _beok('ind_invsr', it)}
-        # 시장 전체 외국인 순매수 합계 (억원)
-        foreign_net = round(sum((f.get('frgnr') or 0) for f in flows.values()), 1)
+        # 시장 전체(코스피 전종목) 외국인 순매수 합계 (억원)
+        # (2026-10-06) 기존 16종목 ETF 합은 시장 대표성 부족 + T+1 보완(ka10058)과 소스 혼재 —
+        # ka10058은 종목 랭킹 상위 100이라 시장 전체와 무관함이 판명되어 폐기.
+        foreign_net = round(sum(_beok('frgnr_invsr', it) or 0 for it in rows66), 1)
     except Exception:
         logger.exception('[macro] ka10066 수급 수집 실패')
 
@@ -526,20 +528,6 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
         'flows': flows,
         'foreign_net_eok': foreign_net,
     }
-
-    # 외국인 수급 T+1 보완 — 어제 행의 foreign_net이 비어 있으면 ka10058로 재조회해서 채운다
-    try:
-        yesterday = (datetime.strptime(today, '%Y%m%d') - timedelta(days=1)).strftime('%Y%m%d')
-        y_row = next((r for r in load_history() if r['date'] == yesterday), None)
-        if y_row is not None and y_row.get('foreign_net_eok') is None:
-            from foreign_flow import fetch_foreign_market_net
-            y_net = await fetch_foreign_market_net(token, yesterday)
-            if y_net is not None:
-                y_row['foreign_net_eok'] = y_net
-                upsert_daily_record(y_row)
-                logger.info(f"[macro] 전일({yesterday}) 외국인 수급 보완: {y_net:+,.0f}억")
-    except Exception:
-        logger.exception('[macro] 전일 외국인 보완 실패')
 
     # 5) 60일 상관 (히스토리 충분할 때만)
     upsert_daily_record(record)
