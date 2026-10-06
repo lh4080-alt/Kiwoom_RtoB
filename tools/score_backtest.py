@@ -136,7 +136,7 @@ def main() -> int:
         oos['eq'][te_mask] = Xte[avail].mean(axis=1)
 
         # B) IC 수축 — 학습창 Spearman IC, soft-threshold 0.05
-        ic = Xtr.apply(lambda s: s.corr(up5[valid_tr], method='spearman'))
+        ic = Xtr.apply(lambda s: s.corr(ytr, method='spearman'))
         w = np.sign(ic) * (ic.abs() - 0.05).clip(lower=0)
         if w.abs().sum() > 0:
             w = w / w.abs().sum()
