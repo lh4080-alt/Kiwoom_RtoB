@@ -38,16 +38,12 @@ SEED = 42
 
 
 # ── 데이터/특징 ──────────────────────────────────────────────
-def build_features() -> pd.DataFrame:
+def build_features():
     from market_breadth import ad_line as ad_line_fn, adx_atr as adx_atr_fn, pct_above_ma200 as pct_above_fn
     from ic_backtest import (breadth_indicators, di_columns, fetch_kospi_ohlc_600,
                              flow_indicators, index_indicators)
 
-    async def gather():
-        ohlc = await fetch_kospi_ohlc_600()
-        return ohlc
-
-    ohlc = asyncio.get_event_loop().run_until_complete(gather())
+    ohlc = asyncio.run(fetch_kospi_ohlc_600())
     feats = pd.DataFrame(index=ohlc.index)
     idx_ind = index_indicators(ohlc, adx_atr_fn)
     for c in idx_ind.columns:
@@ -65,7 +61,7 @@ def build_features() -> pd.DataFrame:
             feats[f'f_{c}'] = f[c]
     try:
         from ic_backtest import macro_indicators_15y
-        m = asyncio.get_event_loop().run_until_complete(macro_indicators_15y())
+        m = asyncio.run(macro_indicators_15y())
         for c in m.columns:
             feats[f'm_{c}'] = m[c]
     except Exception:
