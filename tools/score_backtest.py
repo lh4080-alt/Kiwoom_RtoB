@@ -135,7 +135,7 @@ def main() -> int:
         # B) IC 수축 — 학습창 Spearman IC, soft-threshold 0.05
         ic = Xtr.apply(lambda s: s.corr(up5[valid_tr], method='spearman'))
         w = np.sign(ic) * (ic.abs() - 0.05).clip(lower=0)
-        if w.abs().sum() > 0:
+        if w.abs().sum().sum() > 0:
             w = w / w.abs().sum()
             oos['icsh'][te_mask] = Xte.fillna(0) @ w.reindex(Xte.columns).fillna(0)
 
