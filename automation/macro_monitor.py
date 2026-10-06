@@ -429,12 +429,10 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
     usd_closes = macro.get(SYM_USDKRW, {})
     usd_prev = usd_r = None
     d = datetime.strptime(today, '%Y%m%d')
-    for back in range(0, 7):
-        cand = (d - timedelta(days=back)).strftime('%Y-%m-%d')
-        prev = (d - timedelta(days=back + 1)).strftime('%Y-%m-%d')
-        if cand in usd_closes and prev in usd_closes:
-            usd_prev, usd_r = usd_closes[cand], (usd_closes[cand] / usd_closes[prev] - 1) * 100.0
-            break
+    cand = d.strftime('%Y-%m-%d')
+    prev = (d - timedelta(days=1)).strftime('%Y-%m-%d')
+    if cand in usd_closes and prev in usd_closes:
+        usd_prev, usd_r = usd_closes[cand], (usd_closes[cand] / usd_closes[prev] - 1) * 100.0
     us10y = None
     for back in range(0, 7):
         cand = (d - timedelta(days=back)).strftime('%Y-%m-%d')
@@ -442,12 +440,12 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
             us10y = macro[SYM_US10Y][cand]
             break
     kospi_r = None
-    for back in range(0, 7):
-        cand = (d - timedelta(days=back)).strftime('%Y-%m-%d')
-        prev = (d - timedelta(days=back + 1)).strftime('%Y-%m-%d')
-        if cand in kospi_closes and prev in kospi_closes:
-            kospi_r = (kospi_closes[cand] / kospi_closes[prev] - 1) * 100.0
-            break
+    cand = d.strftime('%Y-%m-%d')
+    prev = (d - timedelta(days=1)).strftime('%Y-%m-%d')
+    if cand in kospi_closes and prev in kospi_closes:
+        kospi_r = (kospi_closes[cand] / kospi_closes[prev] - 1) * 100.0
+    # (2026-10-06) 7일 폴백 폐기 — 연휴 직후 과거 등락률이 당일 행을 오염
+    # (9/21행에 9/18값 +2.66, 9/28행에 9/23값 +0.9 기록 사고). 당일 봉 없으면 None.
 
     # 국면 + 단기 흐름 판정 (표시 전용 — 같은 kospi 히스토리 재사용, 신규 호출 없음)
     regime = compute_regime(kospi_closes)
