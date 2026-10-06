@@ -24,6 +24,13 @@ OHLC_PATH = os.path.join(BASE, '..', 'config', 'data', 'kospi_daily_ohlc.parquet
 
 FIELDS = {'frgnr_netprps': 'frgnr_eok', 'orgn_netprps': 'orgn_eok',
           'ind_netprps': 'ind_eok', 'samo_fund_netprps': 'samo_eok'}
+# 전기/전자(013) — 반도체(삼전·하닉) 포함 대분류 근사 (2026-10-06 Task B 확장)
+EE_FIELDS = {'frgnr_netprps': 'ee_frgnr_eok', 'orgn_netprps': 'ee_orgn_eok',
+             'ind_netprps': 'ee_ind_eok'}
+
+
+def _row_fields(it, fields):
+    return {out: round(_num(it.get(src)) / 10, 1) for src, out in fields.items()}
 
 
 def _num(s):
@@ -46,13 +53,16 @@ async def fetch_day(token, d):
                  'next-key': '', 'api-id': 'ka10051'},
         json={'mrkt_tp': '0', 'amt_qty_tp': '0', 'base_dt': d, 'stex_tp': '1'})
     data = r.json()
+    out = None
     for it in data.get('inds_netprps') or []:
-        cd = str(it.get('inds_cd', ''))
-        if cd.rstrip('_AL').rstrip('_NX') == '001':
+        cd = str(it.get('inds_cd', '')).rstrip('_AL').rstrip('_NX')
+        if cd == '001':
             # 천만원 → 억원 (실측 확정 2026-10-06: 전 투자자 합=0 정합 + 자릿수 검증.
             # 예: 9/29 외인 raw -29,944 → -2,994억. PDF 미명시라 실측으로 확정)
-            return {out: round(_num(it.get(src)) / 10, 1) for src, out in FIELDS.items()}
-    return None
+            out = _row_fields(it, FIELDS)
+        elif cd == '013':
+            out = {**(out or {}), **_row_fields(it, EE_FIELDS)}
+    return out
 
 
 async def main() -> int:
