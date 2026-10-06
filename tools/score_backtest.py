@@ -112,7 +112,8 @@ def main() -> int:
     # walk-forward 구간
     dates = feats.index
     years = dates.year.unique()
-    test_years = [y for y in years if y >= years[0] + TRAIN_Y + 1]
+    # 수급(2021~)·breadth(2021~) 가용을 고려해 전 지표 평가는 2022년부터
+    test_years = [y for y in years if y >= 2022]
     oos = {k: pd.Series(np.nan, index=dates) for k in ('eq', 'icsh', 'logit', 'mom')}
     start = datetime.now()
 
@@ -126,23 +127,25 @@ def main() -> int:
         te_mask = (dates >= t0) & (dates <= eval_end)
         Xtr, Xte = feats[tr_mask], feats[te_mask]
         ytr = up5[tr_mask]
-        valid_tr = Xtr.notna().all(axis=1) & ytr.notna()
-        Xtr, ytr = Xtr[valid_tr].fillna(0), ytr[valid_tr]
+        # 시점별 데이터 가용 지표만 사용 (결측>50% 제외 — 데이터 가용성 문제, IC 기반 제외 아님)
+        avail = [c_ for c_ in Xtr.columns if Xtr[c_].notna().mean() > 0.5]
+        valid_tr = Xtr[avail].notna().all(axis=1) & ytr.notna()
+        Xtr, ytr = Xtr[avail][valid_tr].fillna(0), ytr[valid_tr]
 
-        # A) 균등 — 모든 지표 z 합 평균 (결측 지표 제외 평균)
-        oos['eq'][te_mask] = Xte.fillna(0).mean(axis=1)
+        # A) 균등 — 가용 지표 z 평균 (결측 제외)
+        oos['eq'][te_mask] = Xte[avail].mean(axis=1)
 
         # B) IC 수축 — 학습창 Spearman IC, soft-threshold 0.05
         ic = Xtr.apply(lambda s: s.corr(up5[valid_tr], method='spearman'))
         w = np.sign(ic) * (ic.abs() - 0.05).clip(lower=0)
-        if w.abs().sum().sum() > 0:
+        if w.abs().sum() > 0:
             w = w / w.abs().sum()
-            oos['icsh'][te_mask] = Xte.fillna(0) @ w.reindex(Xte.columns).fillna(0)
+            oos['icsh'][te_mask] = Xte[avail].fillna(0) @ w.reindex(Xte[avail].columns).fillna(0)
 
-        # C) L2 로지스틱 — 결측은 열 평균(학습창) 대체
-        colmean = Xtr.mean()
+        # C) L2 로지스틱 — 결측은 열 평균(학습창), 열 평균 결측 시 0
+        colmean = Xtr.mean().fillna(0)
         Xtr_f = Xtr.fillna(colmean).values
-        Xte_f = Xte.fillna(colmean).values
+        Xte_f = Xte[avail].fillna(colmean).values
         beta = fit_logistic(Xtr_f, ytr.values)
         oos['logit'][te_mask] = pd.Series(1 / (1 + np.exp(-np.c_[np.ones(len(Xte_f)),
                                                                  Xte_f] @ beta)), index=Xte.index)
