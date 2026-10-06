@@ -159,8 +159,24 @@ def ic_stats(ind: pd.Series, targets: dict, keys: list) -> dict:
     return res
 
 
+def partial_ic(x: pd.Series, y: pd.Series, z: pd.Series) -> dict:
+    """통제변수 z의 순위 편상관 — 실현변동성 통제 후 증분 정보 검증 (v2 지시 1번)."""
+    df = pd.concat([x.rename('x'), y.rename('y'), z.rename('z')], axis=1).dropna()
+    n = len(df)
+    if n < 200:
+        return None
+    r_xy = df['x'].corr(df['y'], method='spearman')
+    r_xz = df['x'].corr(df['z'], method='spearman')
+    r_yz = df['y'].corr(df['z'], method='spearman')
+    denom = np.sqrt(max(1 - r_xz ** 2, 1e-9) * max(1 - r_yz ** 2, 1e-9))
+    pic = (r_xy - r_xz * r_yz) / denom
+    n_eff = max(n // 5, 10)
+    t = pic * np.sqrt((n_eff - 2) / max(1 - pic * pic, 1e-9))
+    return {'pic': round(pic, 3), 't': round(t, 2), 'n': n}
+
+
 def quintile_report(ind: pd.Series, targets: dict, q: int = 5) -> pd.DataFrame:
-    """5분위 조건부 평균 수익률 + 극단 구간 (선형 IC 보완, v2)."""
+    """5분위 조건부 평균 수익률 (선형 IC 보완, v2)."""
     rows = []
     for key in ('r5', 'r10'):
         df = pd.concat([ind.rename('x'), targets[key].rename('y')], axis=1).dropna()
@@ -291,21 +307,20 @@ async def main() -> int:
     # ── 3) 5분위 + 극단 구간 조건부 수익률 ──────────────────────
     print()
     print('== 3) 5분위 조건부 수익률 (Q1=지표 최저 ~ Q5=최고, 평균 r) ==')
-    focus = ['adx14', 'adx_signed', 'dd_250', 'z5', 'atr_pctile60',
-             '[breadth] ad_diff20', '[breadth] pct_above200']
+    focus = ['adx14', 'adx_dn', 'dd_250', 'z5', 'atr_pctile60',
+             'frgnr_net', 'frgnr_cum20', 'ind_net', 'ee_frgnr_net']
     for name in focus:
-        if name not in all_ind:
-            continue
-        qt = quintile_report(all_ind[name], targets)
-        if qt.empty:
-            continue
-        print(f'-- {name} --')
-        for key in ('r5', 'r10'):
-            sub = qt[qt['key'] == key]
-            if not sub.empty:
-                cells = ' | '.join(f"{row['bucket']}:{row['mean_r']:+.2f}%(n={row['n']})"
-                                   for _, row in sub.iterrows())
-                print(f'   {key}: {cells}')
+        for full in [k for k in all_ind if k.endswith(name)]:
+            qt = quintile_report(all_ind[full], targets)
+            if qt.empty:
+                continue
+            print(f'-- {full} --')
+            for key in ('r5', 'r10'):
+                sub = qt[qt['key'] == key]
+                if not sub.empty:
+                    cells = ' | '.join(f"{row['bucket']}:{row['mean_r']:+.2f}%(n={row['n']})"
+                                       for _, row in sub.iterrows())
+                    print(f'   {key}: {cells}')
 
     # 극단 구간 (수동 정의)
     print()
@@ -328,6 +343,58 @@ async def main() -> int:
         print(f'{name}: n={len(sel)} | r5 평균 {sel["r5"].mean():+.2f}% '
               f'(중위수 {sel["r5"].median():+.2f}) | r10 평균 {sel["r10"].mean():+.2f}% '
               f'(중위수 {sel["r10"].median():+.2f})')
+
+    # ── 4) 증분 변동성 — 실현변동성 통제 후 잔여 예측력 (v2 지시 1번) ──
+    print()
+    print('== 4) 증분 변동성 (통제: 20일 실현변동성 평균|일간|, 편상관) ==')
+    print('   → 통제 후에도 |편IC|>=.05 & |t|>=2면 "ATR만으로 충분" 아님')
+    c = ohlc['close']
+    rv20 = c.pct_change().abs().rolling(20).mean() * 100
+    for name in ('atr_pctile60', 'adx14', 'orgn_cum20', 'usd_chg5', 'frgnr_minus_orgn'):
+        for full in [k for k in all_ind if k.endswith(name)]:
+            for tk in ('a1', 'a5'):
+                s = partial_ic(all_ind[full], targets[tk], rv20)
+                if not s:
+                    continue
+                mark = '★ 잔여 유의' if abs(s['t']) >= 2 and abs(s['pic']) >= IC_MIN else ''
+                print(f'{full:<32}{tk:>3}  편IC {s["pic"]:+.3f}  t {s["t"]:>6.2f}  n={s["n"]}  {mark}')
+
+    # ── 5) adx_dn 다중비교 판정 병기 + 결합 조건부 (v2 지시 3번) ──
+    print()
+    from statistics import NormalDist
+
+    def z_bonf(k):
+        return -NormalDist().inv_cdf(0.05 / (2 * k))
+
+    cells_dir = sum(3 for _ in all_ind)  # 부호 방향 셀 수
+    t_fam, t_all = z_bonf(cells_dir), z_bonf(cells_dir * 2)
+    print(f'== 5) 다중비교 판정: 방향 셀 {cells_dir}개 → Bonferroni t*={t_fam:.2f} '
+          f'| 전체(|r| 포함) {cells_dir * 2}셀 → t*={t_all:.2f} ==')
+    for s in (ic_stats(all_ind['[지수] adx_dn'], targets, r_keys).get('r1'),
+              ic_stats(all_ind['[지수] adx_dn'], targets, r_keys).get('r5'),
+              ic_stats(all_ind['[지수] adx_dn'], targets, r_keys).get('r10')):
+        if s:
+            v1 = '유의' if abs(s['t']) >= t_fam else '미달'
+            v2 = '유의' if abs(s['t']) >= t_all else '미달'
+            print(f"adx_dn {s['n']} 기준 t={s['t']:.2f} → 방향가족 {v1} / 전체 {v2}")
+
+    print()
+    print('-- adx_dn 결합 조건부 (평균 수익률) --')
+    mask_dn = idx_ind['adx_dn'].notna()
+    c = ohlc['close']
+    for label, m in (
+            ('하락추세 전체', mask_dn),
+            ('하락추세+ADX>=20 (추세 강함)', mask_dn & (idx_ind['adx14'] >= 20)),
+            ('하락추세+ADX>=20+dd<=-20% (낙폭 결합)',
+             mask_dn & (idx_ind['adx14'] >= 20) & (idx_ind['dd_250'] <= -20))):
+        df = pd.concat([m.rename('m')] + [targets[k].rename(k) for k in ('r1', 'r5', 'r10')],
+                       axis=1).dropna()
+        sel = df[df['m']]
+        if len(sel) < 20:
+            print(f'{label}: n={len(sel)} 표본 부족')
+            continue
+        print(f'{label}: n={len(sel)} | r1 {sel["r1"].mean():+.2f}% | r5 {sel["r5"].mean():+.2f}% '
+              f'| r10 {sel["r10"].mean():+.2f}%')
 
     print()
     print('[ic] 저장: tools/ic_results.json (1) 부호 IC 전체)')
