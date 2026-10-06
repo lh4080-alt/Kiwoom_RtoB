@@ -22,16 +22,18 @@ OUT_KOSPI = r'C:\Kiwoom_RtoB\config\data\kospi_daily_ohlc.parquet'
 YEARS = ('2025', '2026')  # MA200(200거래일≈10개월) + 여유 → 최근 2개 연도면 충분
 
 
-def build():
+def build(years=None, out_panel=None):
+    years = tuple(years) if years else YEARS
+    out_panel = out_panel or OUT_PANEL
     t0 = time.time()
     folders = sorted(glob.glob(os.path.join(STOCKS_DIR, '*')))
-    print(f'종목 폴더: {len(folders)}')
+    print(f'종목 폴더: {len(folders)} | 연도: {years} | 출력: {out_panel}')
     cols = ['dt', 'close']
     series = {}
     for i, folder in enumerate(folders):
         code = os.path.basename(folder)
         frames = []
-        for y in YEARS:
+        for y in years:
             fs = glob.glob(os.path.join(folder, y + '.parquet'))
             if fs:
                 try:
@@ -51,10 +53,12 @@ def build():
     panel = pd.DataFrame(series)
     panel.index = pd.to_datetime(panel.index)
     panel = panel.sort_index()
-    panel.to_parquet(OUT_PANEL)
-    print(f'패널 저장: {panel.shape} → {OUT_PANEL} ({time.time()-t0:.0f}초)')
+    panel.to_parquet(out_panel)
+    print(f'패널 저장: {panel.shape} → {out_panel} ({time.time()-t0:.0f}초)')
 
-    # KOSPI 지수 OHLC
+    # KOSPI 지수 OHLC — 운영 출력일 때만 (IC 풀빌드는 ka20006 원본 유지)
+    if out_panel != OUT_PANEL:
+        return
     fs = []
     for y in YEARS + ('2024',):
         fs.extend(glob.glob(os.path.join(INDEX_DIR, y + '.parquet')))
@@ -68,4 +72,7 @@ def build():
 
 
 if __name__ == '__main__':
-    build()
+    # 사용법: python build_breadth_panel.py [연도,쉼표구분] [출력파일]
+    ys = sys.argv[1].split(',') if len(sys.argv) > 1 else None
+    op = sys.argv[2] if len(sys.argv) > 2 else None
+    build(ys, op)
