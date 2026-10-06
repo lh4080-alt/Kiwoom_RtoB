@@ -52,6 +52,14 @@ JSONL_PATH = os.path.join(BASE_DIR, 'config', 'data', 'macro_monitor.jsonl')
 
 CORR_WINDOW = 60  # 상관 윈도 (거래일)
 
+# ── 변동성 레짐 표시 상수 (코스피 14.5년 ka20006 검증 2026-10-06 — 표시 전용) ──
+# ATR% 백분위(가용 역사 기준, 운영 정의 동일) 구간 → 과거 5일 평균 절대수익률(%)
+# 운영정의 |r5| IC +0.32, 5분위 단조 (IC 도구 검증 — tools/ic_backtest.py)
+ATR_BUCKET_ABSR5 = ((0, 20, 1.2), (20, 40, 1.4), (40, 60, 1.8), (60, 80, 1.9), (80, 101, 3.4))
+# 반등 관찰 근거: 고변동(>=80%ile) + 하락추세(-DI>+DI) + ADX>=20 동시 충족 시 표시.
+# 과거 동일 조건 341회, 5일 평균 +1.06% [bootstrap 95% CI +0.57~+1.53], 상승 67%.
+REBOUND_COND = {'n': 341, 'mean_r5': 1.1, 'up_pct': 67}
+
 
 # ── 국내 수집 (ka10081) ───────────────────────────────────────
 async def fetch_kr_daily_closes(token: str, base_dt: str, codes: list) -> dict:
@@ -623,10 +631,20 @@ def format_report(record: dict) -> str:
             flag = ' — 고변동' if pctile is not None and pctile >= 80 else ''
             pctile_s = f" (역내 {pctile:.0f}%ile)" if pctile is not None else ''
             env_s = f"변동성(ATR14) {b['atr14_pct']:.1f}%{pctile_s}{flag}"
+            if pctile is not None:
+                m5 = next((m for lo, hi, m in ATR_BUCKET_ABSR5 if lo <= pctile < hi), None)
+                if m5 is not None:
+                    env_s += f" · 이 구간 과거 5일 평균 변동 ±{m5:.1f}%"
         if b.get('adx_14') is not None:
             adx = b['adx_14']
             word = '추세 약함' if adx < 20 else ('약한 추세' if adx <= 25 else '추세 뚜렷')
             env_s += f" · ADX {adx:.0f} ({word})" if env_s else f"ADX {adx:.0f} ({word})"
+            # 반등 관찰 (표시 전용 — 근거 통계 병기, 표본 불충분·결측 시 생략)
+            dp, dm = b.get('di_plus'), b.get('di_minus')
+            if ((b.get('atr14_pctile') or 0) >= 80 and adx >= 20
+                    and dp is not None and dm is not None and dm > dp):
+                env_s += (f" · 반등 관찰: 과거 동일 조건 {REBOUND_COND['n']}회 "
+                          f"5일 평균 +{REBOUND_COND['mean_r5']:.1f}% (상승 {REBOUND_COND['up_pct']}%)")
         if env_s:
             out.append(f"   ↳ {env_s}")
         return out

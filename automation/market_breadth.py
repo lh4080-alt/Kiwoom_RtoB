@@ -59,7 +59,7 @@ def adx_atr(ohlc: pd.DataFrame, n: int = 14) -> pd.DataFrame:
     minus_di = 100 * minus_dm.ewm(alpha=1 / n, adjust=False).mean() / atr.replace(0, np.nan)
     dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
     adx = dx.ewm(alpha=1 / n, adjust=False).mean()
-    return pd.DataFrame({'adx': adx, 'atr': atr})
+    return pd.DataFrame({'adx': adx, 'atr': atr, 'plus_di': plus_di, 'minus_di': minus_di})
 
 
 def kospi_ma200_slope(close: pd.Series, lookback: int = 20) -> pd.Series:
@@ -89,6 +89,10 @@ def snapshot(panel: pd.DataFrame, ohlc: pd.DataFrame, asof: str = None):
             if len(slope) > 21 and not pd.isna(slope.iloc[-21]) else None
         a = float(ax['adx'].iloc[-1])
         out['adx_14'] = round(a, 1) if not pd.isna(a) else None
+        dp = float(ax['plus_di'].iloc[-1])
+        dm = float(ax['minus_di'].iloc[-1])
+        out['di_plus'] = round(dp, 1) if not pd.isna(dp) else None
+        out['di_minus'] = round(dm, 1) if not pd.isna(dm) else None
         c = float(close.iloc[-1])
         atr_pct = float(ax['atr'].iloc[-1]) / c * 100 if c > 0 else None
         out['atr14_pct'] = round(atr_pct, 2) if atr_pct is not None else None
