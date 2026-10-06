@@ -203,6 +203,10 @@ def flow_indicators(flows: pd.DataFrame) -> pd.DataFrame:
     out['orgn_cum20'] = o.rolling(20).sum()
     out['ind_net'] = i_                      # 개인 — 반대 부호 예상
     out['frgnr_minus_orgn'] = f - o          # 수급 괴리
+    if 'ee_frgnr_eok' in flows.columns:      # 전기/전자(반도체 블록 근사)
+        ef = flows['ee_frgnr_eok']
+        out['ee_frgnr_net'] = ef
+        out['ee_frgnr_cum20'] = ef.rolling(20).sum()
     return out
 
 
