@@ -29,6 +29,8 @@ sys.path.insert(0, os.path.join(BASE, '..', 'automation'))
 
 OHLC_PATH = os.path.join(BASE, '..', 'config', 'data', 'kospi_daily_ohlc.parquet')
 PANEL_PATH = os.path.join(BASE, '..', 'config', 'data', 'breadth_close_panel.parquet')
+FLOWS_PATH = os.path.join(BASE, '..', 'config', 'data', 'investor_flows.parquet')
+FULL_PANEL_PATH = os.path.join(BASE, '..', 'config', 'data', 'breadth_panel_full.parquet')
 
 HORIZONS = (1, 5, 10)
 IC_MIN = 0.05
@@ -172,6 +174,37 @@ def quintile_report(ind: pd.Series, targets: dict, q: int = 5) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def flow_indicators(flows: pd.DataFrame) -> pd.DataFrame:
+    """투자자 수급 지표군 (ka10051 백필, 2021~) — 억원."""
+    out = pd.DataFrame(index=flows.index)
+    f, o, i_ = flows['frgnr_eok'], flows['orgn_eok'], flows['ind_eok']
+    out['frgnr_net'] = f
+    out['frgnr_cum20'] = f.rolling(20).sum()
+    out['orgn_net'] = o
+    out['orgn_cum20'] = o.rolling(20).sum()
+    out['ind_net'] = i_                      # 개인 — 반대 부호 예상
+    out['frgnr_minus_orgn'] = f - o          # 수급 괴리
+    return out
+
+
+async def macro_indicators_15y() -> pd.DataFrame:
+    """달러·미10Y 지표군 (yfinance ~15년) — 운영 fetch_macro_histories 재사용."""
+    from macro_monitor import fetch_macro_histories, SYM_USDKRW, SYM_US10Y
+    macro = await asyncio.to_thread(fetch_macro_histories, 15.0)
+    out = {}
+    usd = macro.get(SYM_USDKRW, {})
+    if usd:
+        s = pd.Series(usd).sort_index()
+        s.index = pd.to_datetime(s.index)
+        out['usd_chg5'] = (s / s.shift(5) - 1) * 100
+    us10y = macro.get(SYM_US10Y, {})
+    if us10y:
+        s = pd.Series(us10y).sort_index()
+        s.index = pd.to_datetime(s.index)
+        out['us10y_chg20'] = (s - s.shift(20)) * 100  # bp
+    return pd.DataFrame(out)
+
+
 async def main() -> int:
     from market_breadth import ad_line as ad_line_fn, adx_atr as adx_atr_fn, pct_above_ma200 as pct_above_fn
 
@@ -197,6 +230,35 @@ async def main() -> int:
             all_ind[f'[breadth] {name}'] = b_ind[name]
     else:
         print('[ic] 패널 없음 — breadth 지표군 스킵')
+
+    # Phase 2 (v3): breadth 풀 패널이 있으면 그쪽 사용 (2021~)
+    if os.path.exists(FULL_PANEL_PATH):
+        full_panel = pd.read_parquet(FULL_PANEL_PATH)
+        b_full = breadth_indicators(full_panel, ad_line_fn, pct_above_fn)
+        for name in b_full.columns:
+            all_ind[f'[breadth21~] {name}'] = b_full[name]
+        print(f'[ic] 풀 패널 breadth: {full_panel.shape} ({full_panel.index.min().date()}~)')
+        # 운영 패널 버전은 풀 패널에 포함되므로 중복 제거
+        for k in [k for k in list(all_ind) if k.startswith('[breadth] ')]:
+            del all_ind[k]
+
+    if os.path.exists(FLOWS_PATH):
+        flows = pd.read_parquet(FLOWS_PATH)
+        flows.index = pd.to_datetime(flows.index, format='%Y%m%d')
+        f_ind = flow_indicators(flows)
+        for name in f_ind.columns:
+            all_ind[f'[수급] {name}'] = f_ind[name]
+        print(f'[ic] 투자자 수급: {len(flows)}일')
+    else:
+        print('[ic] 투자자 수급 없음 — 스킵')
+
+    try:
+        m_ind = await macro_indicators_15y()
+        for name in m_ind.columns:
+            all_ind[f'[거시] {name}'] = m_ind[name]
+        print(f'[ic] 거시(달러·미10Y): {len(m_ind.columns)}지표')
+    except Exception as e:
+        print(f'[ic] 거시 지표 실패: {e}')
 
     # ── 1) 부호 수익률 IC (후보/유의 구분, v2) ──────────────────
     print()
