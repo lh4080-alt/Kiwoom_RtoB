@@ -19,10 +19,13 @@
 import asyncio
 import os
 import sys
+import warnings
 from datetime import datetime
 
 import numpy as np
 import pandas as pd
+
+warnings.simplefilter('ignore')  # Pandas4Warning 스팸 억제 (concat 정렬 기본값 통보)
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(BASE, '..', 'automation'))
