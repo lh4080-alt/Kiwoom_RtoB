@@ -1,14 +1,17 @@
 # -*- coding: utf-8 -*-
 """③ IC 검증 — 거시 지표의 코스피 미래 수익률 예측력 (표시 전용 지표의 승격 관문).
 
-방법 (사전 선언 2026-10-06 — 결과 본 뒤 규칙 바꾸지 않음):
-  지표(t일 값) ↔ 미래 수익률 r_h(t) = 종가 t→t+h, Spearman 랭크상관(IC)
-  통과 규칙: |IC| >= 0.05  AND  |t| >= 2 (겹침 보정: 유효 표본 n/h)  AND
-            전반/후반 절반 분할에서 부호 일치
-  통과 실패 지표는 표시 전용 유지 → 방향 점수화(다음 단계) 대상에서 제외.
+방법 (사전 선언 2026-10-06, Lee 지시 반영 v2):
+  지표(t일 값) ↔ 미래 수익률 r_h(t), Spearman 랭크상관(IC)
+  1차 관문: |IC| >= 0.05 & |t| >= 2 (겹침 보정) & 전반/후반 부호 일치 → "후보(참고)"
+  다중비교 보정: 전체 셀 기준 Bonferroni t >= 3.2 → "유의"
+  보조 분석:
+    - ADX 방향 분해 (adx_signed = ADX × sign(+DI-−DI), 상승/하락 추세 분리)
+    - |수익률| 타깃 (변동성 예측력)
+    - 5분위 + 극단 구간 조건부 수익률 (선형 IC가 못 보는 비선형 구간)
 
 데이터:
-  - ka20006 코스피 지수 OHLC 600봉 (실행 시 config/data/kospi_daily_ohlc.parquet 갱신)
+  - ka20006 코스피 지수 OHLC (~3600봉, 2012~) → config/data/kospi_daily_ohlc.parquet 갱신
   - config/data/breadth_close_panel.parquet (MDC 4,392종목) — breadth 지표군
 
 실행: beelink에서 python tools/ic_backtest.py
@@ -30,10 +33,11 @@ PANEL_PATH = os.path.join(BASE, '..', 'config', 'data', 'breadth_close_panel.par
 HORIZONS = (1, 5, 10)
 IC_MIN = 0.05
 T_MIN = 2.0
+T_BONF = 3.2  # 다중비교 보정 (36+셀 Bonferroni 근사)
 
 
 async def fetch_kospi_ohlc_600() -> pd.DataFrame:
-    """ka20006 코스피 지수 OHLC 600봉 (운영 fetch_kospi_index_closes의 OHLC 확장)."""
+    """ka20006 코스피 지수 OHLC (페이지당 600봉, 6페이지 — 2012년대까지 확보됨)."""
     from modules.semi_trigger.token_provider import get_semi_token
     from utils.rate_limiter import requests
     import utils.config as config
@@ -65,113 +69,207 @@ async def fetch_kospi_ohlc_600() -> pd.DataFrame:
     return pd.DataFrame(rows).drop_duplicates('dt').set_index('dt').sort_index()
 
 
+def di_columns(ohlc: pd.DataFrame, n: int = 14):
+    """Wilder +DI/−DI (ADX 방향 분해용)."""
+    high, low, close = ohlc['high'], ohlc['low'], ohlc['close']
+    up, dn = high.diff(), -low.diff()
+    plus_dm = pd.Series(np.where((up > dn) & (up > 0), up, 0.0), index=high.index)
+    minus_dm = pd.Series(np.where((dn > up) & (dn > 0), dn, 0.0), index=high.index)
+    tr = pd.concat([high - low, (high - close.shift()).abs(),
+                    (low - close.shift()).abs()], axis=1).max(axis=1)
+    atr = tr.ewm(alpha=1 / n, adjust=False).mean()
+    plus_di = 100 * plus_dm.ewm(alpha=1 / n, adjust=False).mean() / atr.replace(0, np.nan)
+    minus_di = 100 * minus_dm.ewm(alpha=1 / n, adjust=False).mean() / atr.replace(0, np.nan)
+    return plus_di, minus_di
+
+
 def index_indicators(ohlc: pd.DataFrame, adx_atr_fn) -> pd.DataFrame:
-    """지수 레벨 지표군 — 운영 macro_monitor/compute_regime·short_term과 동일 정의."""
+    """지수 레벨 지표군 — 운영 macro_monitor 정의 + ADX 방향 분해 (v2)."""
     c = ohlc['close']
     out = pd.DataFrame(index=ohlc.index)
     ma200 = c.rolling(200).mean()
-    out['trend_200disp'] = (c / ma200 - 1) * 100          # 200일선 이격도
-    out['dd_250'] = (c / c.rolling(250).max() - 1) * 100  # 52주 고점대비
-    out['mom_63'] = c.pct_change(63) * 100                # 3개월 모멘텀
+    out['trend_200disp'] = (c / ma200 - 1) * 100
+    out['dd_250'] = (c / c.rolling(250).max() - 1) * 100
+    out['mom_63'] = c.pct_change(63) * 100
     r5 = c.pct_change(5) * 100
     out['ret5'] = r5
     out['z5'] = (r5 - r5.rolling(60).mean()) / r5.rolling(60).std()
     ma5, ma20, ma60 = c.rolling(5).mean(), c.rolling(20).mean(), c.rolling(60).mean()
     out['ma5v20'] = (ma5 > ma20).astype(float).where(ma5.notna() & ma20.notna())
     out['ma20v60'] = (ma20 > ma60).astype(float).where(ma20.notna() & ma60.notna())
-    aa = adx_atr_fn(ohlc)                                  # market_breadth.adx_atr 재사용
+    aa = adx_atr_fn(ohlc)
     out['adx14'] = aa['adx']
     atr_pct = aa['atr'] / c * 100
     out['atr_pctile60'] = atr_pct.rolling(60).rank(pct=True) * 100
+    # ADX 방향 분해 (Lee v2 지시) — 부호화/상승추세/하락추세 분리
+    plus_di, minus_di = di_columns(ohlc)
+    di_dir = np.sign(plus_di - minus_di)
+    out['adx_signed'] = aa['adx'] * di_dir
+    out['adx_up'] = aa['adx'].where(di_dir > 0)   # 상승 추세 중 ADX
+    out['adx_dn'] = aa['adx'].where(di_dir < 0)   # 하락 추세 중 ADX
     return out
 
 
 def breadth_indicators(panel: pd.DataFrame, ad_line_fn, pct_above_fn) -> pd.DataFrame:
-    """전종목 breadth 지표군 — market_breadth 함수 재사용."""
     out = pd.DataFrame(index=panel.index)
     line, diff, up, dn = ad_line_fn(panel)
-    out['ad_diff20'] = line.diff(20)                       # A/D 라인 20일 변화
+    out['ad_diff20'] = line.diff(20)
     p200 = pct_above_fn(panel)
-    out['pct_above200'] = p200                             # 200일선 위 종목 비율
-    out['pct_above200_chg10'] = p200.diff(10)              # 그 10일 변화
+    out['pct_above200'] = p200
+    out['pct_above200_chg10'] = p200.diff(10)
     return out
 
 
-def forward_returns(close: pd.Series) -> pd.DataFrame:
-    return pd.DataFrame({f'r{h}': (close.shift(-h) / close - 1) * 100 for h in HORIZONS},
-                        index=close.index)
-
-
-def ic_stats(ind: pd.Series, fwd: pd.DataFrame) -> dict:
-    """지표 1개 × 전 horizon IC. t는 겹침 보정(유효 표본 n/h) 근사."""
-    res = {}
+def forward_returns(close: pd.Series) -> dict:
+    """부호 수익률 + 절대수익률(변동성 예측력 타깃) — v2."""
+    out = {}
     for h in HORIZONS:
-        col = f'r{h}'
-        df = pd.concat([ind.rename('x'), fwd[col]], axis=1).dropna()
+        r = (close.shift(-h) / close - 1) * 100
+        out[f'r{h}'] = r
+        out[f'a{h}'] = r.abs()
+    return out
+
+
+def ic_stats(ind: pd.Series, targets: dict, keys: list) -> dict:
+    res = {}
+    for key in keys:
+        col = targets[key]
+        df = pd.concat([ind.rename('x'), col.rename('y')], axis=1).dropna()
         n = len(df)
         if n < 60:
-            res[h] = None
+            res[key] = None
             continue
-        ic = df['x'].corr(df[col], method='spearman')
+        h = int(key[1:])
+        ic = df['x'].corr(df['y'], method='spearman')
         n_eff = max(n // h, 10)
         t = ic * np.sqrt((n_eff - 2) / max(1 - ic * ic, 1e-9))
         half = n // 2
-        ic1 = df.iloc[:half]['x'].corr(df.iloc[:half][col], method='spearman')
-        ic2 = df.iloc[half:]['x'].corr(df.iloc[half:][col], method='spearman')
-        res[h] = {'ic': round(ic, 3), 't': round(t, 2), 'n': n,
-                  'ic_h1': round(ic1, 3), 'ic_h2': round(ic2, 3),
-                  'pass': bool(abs(ic) >= IC_MIN and abs(t) >= T_MIN
-                               and np.sign(ic1) == np.sign(ic2) != 0)}
+        ic1 = df.iloc[:half]['x'].corr(df.iloc[:half]['y'], method='spearman')
+        ic2 = df.iloc[half:]['x'].corr(df.iloc[half:]['y'], method='spearman')
+        res[key] = {'ic': round(ic, 3), 't': round(t, 2), 'n': n,
+                    'ic_h1': round(ic1, 3), 'ic_h2': round(ic2, 3),
+                    'cand': bool(abs(ic) >= IC_MIN and abs(t) >= T_MIN
+                                 and np.sign(ic1) == np.sign(ic2) != 0),
+                    'bonf': bool(abs(t) >= T_BONF)}
     return res
+
+
+def quintile_report(ind: pd.Series, targets: dict, q: int = 5) -> pd.DataFrame:
+    """5분위 조건부 평균 수익률 + 극단 구간 (선형 IC 보완, v2)."""
+    rows = []
+    for key in ('r5', 'r10'):
+        df = pd.concat([ind.rename('x'), targets[key].rename('y')], axis=1).dropna()
+        if len(df) < 100:
+            continue
+        try:
+            qs = pd.qcut(df['x'], q, labels=False, duplicates='drop')
+        except ValueError:
+            continue
+        g = df.groupby(qs)['y'].agg(['mean', 'count'])
+        for qi, row in g.iterrows():
+            rows.append({'bucket': f'Q{qi + 1}', 'key': key,
+                         'n': int(row['count']), 'mean_r': round(row['mean'], 2)})
+    return pd.DataFrame(rows)
 
 
 async def main() -> int:
     from market_breadth import ad_line as ad_line_fn, adx_atr as adx_atr_fn, pct_above_ma200 as pct_above_fn
 
-    print('[ic] ka20006 OHLC 600봉 조회...')
+    print('[ic] ka20006 OHLC 조회...')
     ohlc = await fetch_kospi_ohlc_600()
     if len(ohlc) < 320:
         print(f'[ic] OHLC 봉 부족: {len(ohlc)}')
         return 1
-    ohlc.to_parquet(OHLC_PATH)  # market_breadth 동일 형식 — PanelBuild와 상호 호환
+    ohlc.to_parquet(OHLC_PATH)
     print(f'[ic] OHLC {len(ohlc)}봉 ({ohlc.index.min().date()}~{ohlc.index.max().date()}) 갱신 저장')
 
-    fwd = forward_returns(ohlc['close'])
-    results = {}
+    targets = forward_returns(ohlc['close'])
+    r_keys = [f'r{h}' for h in HORIZONS]
+    a_keys = [f'a{h}' for h in HORIZONS]
 
     idx_ind = index_indicators(ohlc, adx_atr_fn)
-    for name in idx_ind.columns:
-        results[f'[지수] {name}'] = ic_stats(idx_ind[name], fwd)
+    all_ind = {f'[지수] {name}': idx_ind[name] for name in idx_ind.columns}
 
     if os.path.exists(PANEL_PATH):
         panel = pd.read_parquet(PANEL_PATH)
         b_ind = breadth_indicators(panel, ad_line_fn, pct_above_fn)
         for name in b_ind.columns:
-            results[f'[breadth] {name}'] = ic_stats(b_ind[name], fwd)
+            all_ind[f'[breadth] {name}'] = b_ind[name]
     else:
         print('[ic] 패널 없음 — breadth 지표군 스킵')
 
-    # 리포트
+    # ── 1) 부호 수익률 IC (후보/유의 구분, v2) ──────────────────
     print()
-    print(f'{"지표":<28}{"h":>3}{"IC":>7}{"t(보정)":>8}{"n":>6}{"전반":>7}{"후반":>7}  판정')
-    print('-' * 80)
-    n_pass = 0
-    for name, hs in results.items():
-        for h, s in hs.items():
+    print(f'== 1) 부호 수익률 IC (후보=|IC|>=.05&t>=2&부호일치 / 유의=t>={T_BONF}) ==')
+    print(f'{"지표":<30}{"h":>3}{"IC":>7}{"t":>7}{"n":>6}{"전반":>7}{"후반":>7}  판정')
+    print('-' * 82)
+    for name, ind in all_ind.items():
+        for h, s in ic_stats(ind, targets, r_keys).items():
             if s is None:
                 continue
-            mark = '★ 통과' if s['pass'] else ''
-            if s['pass']:
-                n_pass += 1
-            print(f'{name:<28}{h:>3}{s["ic"]:>+7.3f}{s["t"]:>8.2f}{s["n"]:>6}'
+            mark = '★유의' if s['bonf'] else ('○후보' if s['cand'] else '')
+            print(f'{name:<30}{h:>3}{s["ic"]:>+7.3f}{s["t"]:>7.2f}{s["n"]:>6}'
                   f'{s["ic_h1"]:>+7.3f}{s["ic_h2"]:>+7.3f}  {mark}')
-    print('-' * 80)
-    print(f'통과: {n_pass}개 / 전체 {sum(len([s for s in hs.values() if s]) for hs in results.values())}셀')
 
+    # ── 2) |수익률| 타깃 (변동성 예측력) ────────────────────────
+    print()
+    print('== 2) |수익률| 타깃 IC (변동성 예측력) ==')
+    print(f'{"지표":<30}{"h":>3}{"IC":>7}{"t":>7}{"n":>6}  판정')
+    print('-' * 70)
+    for name, ind in all_ind.items():
+        for h, s in ic_stats(ind, targets, a_keys).items():
+            if s is None:
+                continue
+            mark = '★유의' if s['bonf'] else ('○후보' if s['cand'] else '')
+            print(f'{name:<30}{h:>3}{s["ic"]:>+7.3f}{s["t"]:>7.2f}{s["n"]:>6}  {mark}')
+
+    # ── 3) 5분위 + 극단 구간 조건부 수익률 ──────────────────────
+    print()
+    print('== 3) 5분위 조건부 수익률 (Q1=지표 최저 ~ Q5=최고, 평균 r) ==')
+    focus = ['adx14', 'adx_signed', 'dd_250', 'z5', 'atr_pctile60',
+             '[breadth] ad_diff20', '[breadth] pct_above200']
+    for name in focus:
+        if name not in all_ind:
+            continue
+        qt = quintile_report(all_ind[name], targets)
+        if qt.empty:
+            continue
+        print(f'-- {name} --')
+        for key in ('r5', 'r10'):
+            sub = qt[qt['key'] == key]
+            if not sub.empty:
+                cells = ' | '.join(f"{row['bucket']}:{row['mean_r']:+.2f}%(n={row['n']})"
+                                   for _, row in sub.iterrows())
+                print(f'   {key}: {cells}')
+
+    # 극단 구간 (수동 정의)
+    print()
+    print('== 극단 구간 조건부 (평균 r5 / r10) ==')
+    c = ohlc['close']
+    extremes = {
+        '낙폭 dd<=-20%': idx_ind['dd_250'] <= -20,
+        '낙폭 dd<=-25%': idx_ind['dd_250'] <= -25,
+        '급락 z5<=-1.5': idx_ind['z5'] <= -1.5,
+        '고변동 atr>=80%ile': idx_ind['atr_pctile60'] >= 80,
+        '강추세 adx>=25': idx_ind['adx14'] >= 25,
+    }
+    for name, mask in extremes.items():
+        df = pd.concat([mask.rename('m')] + [targets[k].rename(k) for k in ('r5', 'r10')],
+                       axis=1).dropna()
+        sel = df[df['m']]
+        if len(sel) < 20:
+            print(f'{name}: n={len(sel)} 표본 부족')
+            continue
+        print(f'{name}: n={len(sel)} | r5 평균 {sel["r5"].mean():+.2f}% '
+              f'(중위수 {sel["r5"].median():+.2f}) | r10 평균 {sel["r10"].mean():+.2f}% '
+              f'(중위수 {sel["r10"].median():+.2f})')
+
+    print()
+    print('[ic] 저장: tools/ic_results.json (1) 부호 IC 전체)')
     import json
+    dump = {name: ic_stats(ind, targets, r_keys) for name, ind in all_ind.items()}
     with open(os.path.join(BASE, 'ic_results.json'), 'w', encoding='utf-8') as f:
-        json.dump(results, f, ensure_ascii=False, indent=1)
-    print('[ic] 저장: tools/ic_results.json')
+        json.dump(dump, f, ensure_ascii=False, indent=1)
     return 0
 
 
