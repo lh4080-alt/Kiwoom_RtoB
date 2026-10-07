@@ -75,6 +75,13 @@ def run_checks(cross_alerts: list = None) -> dict:
     b = last.get('breadth') or {}
     if b.get('pct_above_ma200') is None:
         alerts.append('소스 누락: breadth 미기록')
+    # 정체 검사 — 어제와 breadth 핵심값이 소수점까지 동일 + 패널 미갱신 → 갱신 실패 의심
+    if len(hist) >= 2:
+        prev_b = hist[-2].get('breadth') or {}
+        if (b.get('advancers') is not None and prev_b.get('advancers') == b.get('advancers')
+                and prev_b.get('pct_above_ma200') == b.get('pct_above_ma200')
+                and b.get('panel_last_date') not in (None, last['date'])):
+            alerts.append(f'breadth 정체: panel_last {b.get("panel_last_date")} — 패널 갱신 실패 의심')
 
     # 수익률 정합 — 어제 kospi_ret vs kospi parquet 재계산
     try:

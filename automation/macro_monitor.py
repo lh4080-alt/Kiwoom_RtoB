@@ -49,6 +49,7 @@ SYM_KOSPI = '^KS11'
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 JSONL_PATH = os.path.join(BASE_DIR, 'config', 'data', 'macro_monitor.jsonl')
+KOSPI_OHLC_PATH = os.path.join(BASE_DIR, '..', 'config', 'data', 'kospi_daily_ohlc.parquet')
 
 CORR_WINDOW = 60  # 상관 윈도 (거래일)
 
@@ -84,6 +85,42 @@ async def fetch_kr_daily_closes(token: str, base_dt: str, codes: list) -> dict:
         except Exception:
             logger.exception(f"[macro] ka10081 예외 {code}")
     return out
+
+
+async def fetch_kospi_ohlc_full(token: str) -> pd.DataFrame:
+    """ka20006 코스피 지수 OHLC (~3,600봉, 2012~) — kospi_daily_ohlc.parquet 단일 소유자.
+
+    market_breadth의 ATR 백분위 분모 고정 목적 (2026-10-07: PanelBuild의 MDC KOSPI
+    저장과 IC 도구의 ka20006 갱신이 경쟁하던 문제 정리).
+    """
+    import pandas as pd
+    from utils.rate_limiter import requests
+    import utils.config as config
+    rows, cont, nk = [], 'N', ''
+    for _page in range(6):
+        r = await requests.post(
+            config.get_host_url() + '/api/dostk/chart',
+            headers={'Content-Type': 'application/json;charset=UTF-8',
+                     'authorization': f'Bearer {token}', 'cont-yn': cont,
+                     'next-key': nk, 'api-id': 'ka20006'},
+            json={'inds_cd': '001', 'base_dt': date.today().strftime('%Y%m%d')})
+        d = r.json()
+
+        def _v(key, it):
+            s = str(it.get(key, '')).strip().lstrip('-')
+            return int(s) / 100.0 if s else float('nan')
+
+        for it in d.get('inds_dt_pole_qry') or []:
+            dt = str(it.get('dt', ''))
+            if len(dt) == 8:
+                rows.append({'dt': pd.Timestamp(dt), 'open': _v('open_pric', it),
+                             'high': _v('high_pric', it), 'low': _v('low_pric', it),
+                             'close': _v('cur_prc', it)})
+        cont = r.headers.get('cont-yn', 'N')
+        nk = r.headers.get('next-key', '')
+        if cont != 'Y':
+            break
+    return pd.DataFrame(rows).drop_duplicates('dt').set_index('dt').sort_index()
 
 
 async def fetch_kospi_index_closes(token: str, base_dt: str, min_bars: int = 300) -> dict:
@@ -428,8 +465,15 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
         logger.info(f"[macro] {today} 국내 휴장 (최신 캔들 {max(samsung.keys())}) — 스킵")
         return {}
 
-    # 1-1) 코스피 지수 일봉 (ka20006 — 국내 소스 키움 통일, yfinance 시차 해소)
-    kospi_closes = await fetch_kospi_index_closes(token, today)
+    # 1-1) 코스피 지수 — ka20006 OHLC (kospi parquet 단일 소유자, 매일 갱신)
+    try:
+        ohlc_k = await fetch_kospi_ohlc_full(token)
+        kospi_closes = {d.strftime('%Y-%m-%d'): float(v)
+                        for d, v in zip(ohlc_k['dt'], ohlc_k['close'])}
+        ohlc_k.to_parquet(KOSPI_OHLC_PATH)
+    except Exception:
+        logger.exception('[macro] ka20006 OHLC 실패 — closes 단독 폴백')
+        kospi_closes = await fetch_kospi_index_closes(token, today)
 
     # T+1 소급 — 어제 행 kospi_ret이 비어 있으면 오늘 closes로 채움
     # (ka20006 당일 봉이 16:50에 간헐 지연 → 그날 None. 7일 폴백은 과거값 오염
@@ -458,7 +502,11 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
         vals = [r.get(d) for r in rets.values() if r.get(d) is not None]
         return (sum(vals) / len(vals)) if vals else None
 
-    semis_today = block_avg(semis_ret, today)
+    # 블록 본값 v2 (2026-10-07 Lee 지시) — 삼전·하닉 2종목 평균.
+    # 기존 3종목 균등평균은 소부장 급등락이 본값을 가리는 왜곡 (10/7 사례: 삼전 -1.5·하닉 -3.6인데 블록 -0.0%).
+    core_pair = [semis_ret.get('005930', {}).get(today), semis_ret.get('000660', {}).get(today)]
+    semis_today = (sum(core_pair) / 2) if all(v is not None for v in core_pair) \
+        else block_avg(semis_ret, today)
     others_today = block_avg(others_ret, today)
 
     # 기타 섹터 개별 등락 (리포트 상위 표시용)
@@ -649,10 +697,12 @@ def format_report(record: dict) -> str:
             f"🏷 4축 | ①강도 ADX {b.get('adx_14', 0):.0f} {'강' if (b.get('adx_14') or 0) >= 20 else '약'}"
             f" · 변동 Q{min(int((b.get('atr14_pctile') or 0) // 20), 4) + 1}{rb_s}")
         lines.append(f"   ②방향 {axes['axis2']} · {above_s}{di_s} · 3개월 {mom_s}{reg.get('mom_dir', '')}")
-        lines.append(f"   ③수급 {axes['axis3']}  ④폭·주도 {axes['axis4']} · 200일선 위 {b.get('pct_above_ma200', 0):.0f}%")
+        cum20 = axes.get('semi_frgn_cum20_eok')
+        cum20_s = f" · 반도체 외인20일 {cum20:+,.0f}억" if cum20 is not None else ''
+        lines.append(f"   ③수급 {axes['axis3']}{cum20_s}  ④폭·주도 {axes['axis4']} · 200일선 위 {b.get('pct_above_ma200', 0):.0f}%")
         if record.get('axes_signal') == 1:
             lines.append('   🔄 §7 신호(참고): 과거 16건·에피소드 16개 — 미확정')
-        lines.append(f"   지속 {len([1 for r in history if (r.get('regime') or {}).get('label') == reg.get('label')])}일째")
+        lines.append(f"   국면 {reg['label']} 지속 {len([1 for r in history if (r.get('regime') or {}).get('label') == reg.get('label')])}거래일째")
 
     if reg and not (FOUR_AXIS_DISPLAY and axes.get('axis2') not in (None, '데이터부족')):
         mom_s = 'N/A' if reg.get('mom') is None else f"{reg['mom']:+.1f}%"

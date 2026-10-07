@@ -56,19 +56,11 @@ def build(years=None, out_panel=None):
     panel.to_parquet(out_panel)
     print(f'패널 저장: {panel.shape} → {out_panel} ({time.time()-t0:.0f}초)')
 
-    # KOSPI 지수 OHLC — 운영 출력일 때만 (IC 풀빌드는 ka20006 원본 유지)
+    # KOSPI 지수 OHLC 저장 제거 (2026-10-07) — kospi_daily_ohlc.parquet의 단일 소유자는
+    # ka20006(운영 macro_monitor.run_daily가 매일 갱신). MDC 지수와 소스 경쟁하던 문제 정리.
     if out_panel != OUT_PANEL:
         return
-    fs = []
-    for y in YEARS + ('2024',):
-        fs.extend(glob.glob(os.path.join(INDEX_DIR, y + '.parquet')))
-    if fs:
-        df = pd.concat([pd.read_parquet(f) for f in fs])
-        df['dt'] = pd.to_datetime(df['dt'])
-        df = df.drop_duplicates('dt').set_index('dt').sort_index()
-        keep = [c for c in ('open', 'high', 'low', 'close', 'volume') if c in df.columns]
-        df[keep].to_parquet(OUT_KOSPI)
-        print(f'지수 OHLC 저장: {len(df)}행 → {OUT_KOSPI}')
+    print(f'KOSPI OHLC는 ka20006 소스가 소유 — 여기서 저장하지 않음')
 
 
 if __name__ == '__main__':

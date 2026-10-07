@@ -69,6 +69,7 @@ def compute_axes(today: str, kospi_closes: dict, adx: float) -> dict:
         out['axis3'] = ('괴리有' if (px5 is not None and px5 > 0 and cum20 < 0)
                         else ('無' if (px5 is not None and px5 <= 0 and cum20 >= 0) else '혼합'))
         out['axis4'] = '주도유지' if rel > 0 else '주도이탈'
+        out['semi_frgn_cum20_eok'] = round(float(cum20), 1)
     except Exception:
         out['axis3'] = out['axis4'] = '데이터부족'
     return out
