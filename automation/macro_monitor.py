@@ -585,6 +585,16 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
         'breadth': breadth,
     }
 
+    # 4축 상태 + 전방 검증 로그 (진짜 홀드아웃 — 표시 구조와 별개, 2026-10-07 지시서 §3·§4-1)
+    try:
+        import market_axes
+        axes = market_axes.compute_axes(today, kospi_closes, (breadth or {}).get('adx_14'))
+        record['axes'] = axes
+        f_rec = market_axes.record_forward(today, axes, breadth)
+        record['axes_signal'] = f_rec.get('signal_mu_sox')
+    except Exception:
+        logger.exception('[macro] 4축·전방 로그 실패 — 무영향')
+
     # 5) 60일 상관 (히스토리 충분할 때만)
     upsert_daily_record(record)
     history = load_history()
@@ -621,8 +631,30 @@ def format_report(record: dict) -> str:
              f"📈 대시보드: http://192.168.75.239:8080/macro_dashboard.html",
              f"📈 코스피 차트: https://stock.naver.com/domestic/index/KOSPI/price"]
 
+    # §3 4축 표시 구조 — 플래그 한 줄로 기존 포맷 복귀 (모바일 8줄 이내).
+    # 수치 원칙: 4-1 상태별 수익률·하락확률 미표시. 200일선 위/아래·이탈 경과일은 사실 정보.
+    FOUR_AXIS_DISPLAY = True
     reg = record.get('regime')
-    if reg:
+    axes = record.get('axes') or {}
+    if FOUR_AXIS_DISPLAY and reg and axes.get('axis2') not in (None, '데이터부족'):
+        mom_s = 'N/A' if reg.get('mom') is None else f"{reg['mom']:+.1f}%"
+        b = record.get('breadth') or {}
+        above_s = '200일선 위' if axes.get('above200') else f"200일선 아래 (이탈 {axes.get('ma200_break_days', '?')}일)"
+        di_s = ''
+        if b.get('di_plus') is not None and b.get('di_minus') is not None:
+            di_s = '·+DI>-DI' if b['di_plus'] > b['di_minus'] else '·-DI>+DI'
+        rb = reg.get('reversal_detect') or {}
+        rb_s = ' · 반등 관찰(과거 341회)' if rb.get('rebound_pct') is not None and rb.get('rebound_pct') >= 10 else ''
+        lines.append(
+            f"🏷 4축 | ①강도 ADX {b.get('adx_14', 0):.0f} {'강' if (b.get('adx_14') or 0) >= 20 else '약'}"
+            f" · 변동 Q{min(int((b.get('atr14_pctile') or 0) // 20), 4) + 1}{rb_s}")
+        lines.append(f"   ②방향 {axes['axis2']} · {above_s}{di_s} · 3개월 {mom_s}{reg.get('mom_dir', '')}")
+        lines.append(f"   ③수급 {axes['axis3']}  ④폭·주도 {axes['axis4']} · 200일선 위 {b.get('pct_above_ma200', 0):.0f}%")
+        if record.get('axes_signal') == 1:
+            lines.append('   🔄 §7 신호(참고): 과거 16건·에피소드 16개 — 미확정')
+        lines.append(f"   지속 {len([1 for r in history if (r.get('regime') or {}).get('label') == reg.get('label')])}일째")
+
+    if reg and not (FOUR_AXIS_DISPLAY and axes.get('axis2') not in (None, '데이터부족')):
         mom_s = 'N/A' if reg.get('mom') is None else f"{reg['mom']:+.1f}%"
         # 라벨 지속일수 (regime 기록이 있는 행부터)
         dur = 0
