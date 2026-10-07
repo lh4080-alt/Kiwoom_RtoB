@@ -205,6 +205,27 @@ def load_history(path: str = None) -> list:
         return [json.loads(l) for l in f if l.strip()]
 
 
+def clear_fields(date: str, fields: list, path: str = None):
+    """필드 명시 제거 — upsert 병합은 None을 무시하므로 직접 재작성이 필요 (2026-10-07)."""
+    path = path or JSONL_PATH
+    if not os.path.exists(path):
+        return
+    rows = [json.loads(l) for l in open(path, encoding='utf-8') if l.strip()]
+    hit = False
+    for r in rows:
+        if r.get('date') == date:
+            hit = True
+            for k in fields:
+                r[k] = None
+    if not hit:
+        return
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + '\n')
+    os.replace(tmp, path)
+
+
 def pearson(xs: list, ys: list):
     n = len(xs)
     if n < 3 or n != len(ys):
