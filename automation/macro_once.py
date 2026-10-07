@@ -57,6 +57,18 @@ async def run_daily(send_telegram: bool = True) -> int:
             pass  # 대시보드 첨부 실패해도 리포트는 이미 발송됨
     print(f"[macro_once] daily 완료 {datetime.now().isoformat(timespec='seconds')} "
           f"missing={missing or 'none'}")
+    # §8 데이터 품질 점검 (자동 보정 금지 — 이상 시 알림만)
+    try:
+        import data_quality
+        data_quality.token_holder['token'] = token
+        q = data_quality.run_checks()
+        if q['sent']:
+            from telegram.tel_send import tel_send
+            await tel_send('⚠️ [품질점검] ' + ' | '.join(q['sent']))
+        print(f"[macro_once] 품질점검: 알림 {len(q['sent'])}/{len(q['alerts'])}건")
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception('[macro_once] 품질점검 실패 — 무영향')
     return 0
 
 
