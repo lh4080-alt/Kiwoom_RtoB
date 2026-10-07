@@ -410,6 +410,22 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
     # 1-1) 코스피 지수 일봉 (ka20006 — 국내 소스 키움 통일, yfinance 시차 해소)
     kospi_closes = await fetch_kospi_index_closes(token, today)
 
+    # T+1 소급 — 어제 행 kospi_ret이 비어 있으면 오늘 closes로 채움
+    # (ka20006 당일 봉이 16:50에 간헐 지연 → 그날 None. 7일 폴백은 과거값 오염
+    #  사고(9/21·9/28)로 제거했으므로, 결측은 다음날 ka20006 확정값으로 소급)
+    try:
+        y_key = (datetime.strptime(today, '%Y%m%d') - timedelta(days=1)).strftime('%Y%m%d')
+        yy = f'{y_key[:4]}-{y_key[4:6]}-{y_key[6:]}'
+        pp = (datetime.strptime(today, '%Y%m%d') - timedelta(days=2)).strftime('%Y-%m-%d')
+        if yy in kospi_closes and pp in kospi_closes:
+            y_row = next((r for r in load_history() if r['date'] == y_key), None)
+            if y_row is not None and y_row.get('kospi_ret') is None:
+                y_ret = round((kospi_closes[yy] / kospi_closes[pp] - 1) * 100, 2)
+                upsert_daily_record({'date': y_key, 'kospi_ret': y_ret})
+                logger.info(f"[macro] 전일({y_key}) kospi_ret 소급: {y_ret:+.2f}%")
+    except Exception:
+        logger.exception('[macro] 전일 kospi_ret 소급 실패')
+
     # 2) 거시 (동기 → to_thread)
     macro = await asyncio.to_thread(fetch_macro_histories)
 
