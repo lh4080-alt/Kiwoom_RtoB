@@ -102,12 +102,12 @@ def main() -> int:
                     if kr_next(d, kr_days, kr_set) is not None})
     # 에피소드 — 연속 미국 세션 신호일 = 1개 (간격 4캘린더일 이하면 연속으로 간주)
     episodes, cur = [], [pairs[0]]
-    for a, b in pairs[1:]:
-        if (pd.Timestamp(b[0]) - pd.Timestamp(cur[-1][0])).days <= 4:
-            cur.append((a, b))
+    for pa, pb in pairs[1:]:
+        if (pd.Timestamp(pa) - pd.Timestamp(cur[-1][0])).days <= 4:
+            cur.append((pa, pb))
         else:
             episodes.append(cur)
-            cur = [(a, b)]
+            cur = [(pa, pb)]
     episodes.append(cur)
     print(f'[신호] 신호일 {len(sig_days)}일 → 에피소드 {len(episodes)}개 '
           f'(연도: {sorted({e[0][0][:4] for e in episodes})})')
