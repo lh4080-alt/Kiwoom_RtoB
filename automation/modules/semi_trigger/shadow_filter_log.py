@@ -107,6 +107,9 @@ def _new_signal_z(path: str, cur_mu, cur_sox) -> dict:
            'spread_z': _z(mu_hist and [m - s for m, s in zip(mu_hist, sox_hist)], spread)}
     mz, sz = out['mu_z'], out['sox_z']
     out['new_signal'] = 1 if (mz is not None and sz is not None and mz <= -1.5 and sz <= -0.5) else 0
+    # v2 변형 (사전 선언 2026-10-07 Lee 지시) — SOX 단독. ablation에서 결합과 동급으로
+    # 나왔으나 규칙을 결과 뒤에 바꾸지 않기 위해 현재 정의는 유지하고 병행 기록만.
+    out['new_signal_v2_sox_only'] = 1 if (sz is not None and sz <= -0.5) else 0
     return out
 
 

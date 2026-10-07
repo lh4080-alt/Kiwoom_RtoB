@@ -5,7 +5,7 @@
 이 스크립트로 먼저 검증한다.
 
 사용:
-    cd d:\\Kiwoom_RtoB
+    cd d:\\Bot_root\\Kiwoom_RtoB
     python tools\\api_probe.py
 
 종목: 005930 (삼성전자 — 시계열 데이터가 안정적으로 채워짐)

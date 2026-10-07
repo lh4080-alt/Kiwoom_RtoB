@@ -289,6 +289,20 @@ def main() -> int:
     a_ex_22 = np.array([e['r'] for e in ep20 if e['year'] != 2022])
     print(f'전체: {a_all.mean():+.2f}% (n={len(a_all)}) | 상위2 기여 제외: {a_ex_top.mean():+.2f}% '
           f'(n={len(a_ex_top)}) | 2022 전체 제외: {a_ex_22.mean():+.2f}% (n={len(a_ex_22)})')
+    # 20거래일 중복 제거 — 실행일 간격 <20거래일인 에피소드는 첫 것만 유지 (독립 표본 기준)
+    dedup, last_i = [], None
+    for e in ep20:
+        i_now = int(np.where(cl_h.index >= e['day'])[0][0])
+        if last_i is None or i_now - last_i >= 20:
+            dedup.append(e)
+            last_i = i_now
+    a_dd = np.array([e['r'] for e in dedup])
+    bp = np.array([a_dd[rng2.integers(0, len(a_dd), len(a_dd))].mean() for _ in range(2000)])
+    lo, hi = np.percentile(bp, [2.5, 97.5])
+    print(f'20거래일 중복 제거 후: {a_dd.mean():+.2f}% [{lo:+.2f},{hi:+.2f}] (n={len(a_dd)} — 독립 표본 기준 CI)')
+    print()
+    print('판정: 관찰(미확정) — 에피소드 겹침·2022 취약·MU 기여 불명확. 전방 데이터로 확정.')
+    print('신호 정의(MU+SOX)는 현재 버전 유지; SOX 단독은 v2 변형으로 섀도 병행 기록 (사전 선언).')
 
     print()
     print('해석: 삼성전자는 CI 0 포함 — "미검출". 전방 검증은 연 3~4건이라 수년 소요 —')
