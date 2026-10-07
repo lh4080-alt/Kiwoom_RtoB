@@ -291,10 +291,11 @@ async def run_pipeline_morning(eval_date: str, token: Optional[str] = None,
 		'targets':      targets,
 	}
 
-	# 눌림매수 필터 섀도 로깅 (표시 전용 축적 — 본 동작 무영향, 2026-10-06 Lee 지시)
+	# 눌림매수 필터 + §7 신규 신호 섀도 로깅 (표시 전용 축적 — 본 동작 무영향)
 	try:
 		from .shadow_filter_log import log_shadow
-		n_shadow = log_shadow(eval_date, list(TARGET_UNDERLYINGS))
+		n_shadow = log_shadow(eval_date, list(TARGET_UNDERLYINGS),
+		                       us_extra={'mu': mu, 'sox': sox})
 		logger.info(f"[pipeline_morning] 섀도 로그 {n_shadow}행 기록")
 	except Exception:
 		logger.exception("[pipeline_morning] 섀도 로그 실패 — 무영향")
