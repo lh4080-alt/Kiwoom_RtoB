@@ -131,7 +131,7 @@ def main() -> int:
             a = np.array(rets)
             if len(a) < 5:
                 continue
-            boots = [a[rng.integers(0, len(a), len(a))].mean() for _ in range(2000)]
+            boots = np.array([a[rng.integers(0, len(a), len(a))].mean() for _ in range(2000)])
             lo, hi = np.percentile(boots, [2.5, 97.5])
             p = 2 * min((boots <= 0).mean(), (boots >= 0).mean())
             ps.append(p)
