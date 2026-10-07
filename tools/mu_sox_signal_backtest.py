@@ -202,25 +202,34 @@ def main() -> int:
                   f'(n={len(a)}) | 종가진행 {b.mean():+.2f}%')
 
     print()
-    print('== 보강 2) 대조군 — 기저 수익 & 하닉 자체 낙폭 매칭 ==')
+    print('== 보강 2) 대조군 — look-forward 20일 수익 기준 (실행일 시가진입과 동일 체계) ==')
     cl_h = ohlcs['000660']['close'].astype(float)
     cl_h.index = pd.to_datetime(cl_h.index).date
-    hi20 = cl_h.pct_change(20) * 100
-    base20 = hi20.dropna()
-    sig_exec = [pd.Timestamp(ep[-1][1]).date() for ep in episodes]
-    sig20 = [hi20.loc[d] for d in sig_exec if d in hi20.index]
-    print(f'하닉 20일 수익 — 전체 기저: {base20.mean():+.2f}% (n={len(base20)}) | '
-          f'신호일: {np.mean(sig20):+.2f}% (n={len(sig20)}) | 초과: {np.mean(sig20) - base20.mean():+.2f}%p')
-    # 낙폭 매칭 대조군 — 신호일 하닉 고점대비(dd250) 분포와 비슷한 날, 신호 없는 날
     dd250 = (cl_h / cl_h.rolling(250).max() - 1) * 100
+    idx = cl_h.index
+
+    def fwd20(day):
+        i0 = np.where(idx >= day)[0]
+        if not len(i0) or i0[0] + 20 >= len(cl_h) or idx[i0[0]] != day:
+            return None
+        return (cl_h.iloc[i0[0] + 20] / cl_h.iloc[i0[0]] - 1) * 100
+
+    sig_exec = [pd.Timestamp(ep[-1][1]).date() for ep in episodes]
+    sig20 = [v for v in (fwd20(d) for d in sig_exec) if v is not None]
+    # 기저: 전체 거래일 look-forward 20일
+    base20 = [fwd20(d) for d in idx[:-20]]
+    base20 = [v for v in base20 if v is not None]
+    print(f'하닉 20일(look-fwd) — 전체 기저: {np.mean(base20):+.2f}% (n={len(base20)}) | '
+          f'신호일: {np.mean(sig20):+.2f}% (n={len(sig20)}) | 초과: {np.mean(sig20) - np.mean(base20):+.2f}%p')
+    # 낙폭 매칭 대조군 — 신호일 dd250 중위 이하 + 신호 없는 날, look-forward
     sig_dd = [dd250.loc[d] for d in sig_exec if d in dd250.index and not pd.isna(dd250.loc[d])]
     med_dd = np.median(sig_dd)
     sig_set = set(sig_exec)
-    ctrl = [d for d in dd250.index if d not in sig_set
+    ctrl = [d for d in idx[:-20] if d not in sig_set
             and not pd.isna(dd250.loc[d]) and dd250.loc[d] <= med_dd]
-    ctrl20 = [hi20.loc[d] for d in ctrl if d in hi20.index]
-    print(f'하닉 낙폭 매칭 대조군 (dd<=신호일 중위 {med_dd:.1f}%, 신호 없는 날): '
-          f'20일 수익 {np.mean(ctrl20):+.2f}% (n={len(ctrl20)}) | 신호일 초과: {np.mean(sig20) - np.mean(ctrl20):+.2f}%p')
+    ctrl20 = [v for v in (fwd20(d) for d in ctrl) if v is not None]
+    print(f'하닉 낙폭 매칭 대조군 (dd<=중위 {med_dd:.1f}%, 신호 없는 날): '
+          f'{np.mean(ctrl20):+.2f}% (n={len(ctrl20)}) | 신호일 초과: {np.mean(sig20) - np.mean(ctrl20):+.2f}%p')
 
     print()
     print('== 보강 3) 조건 분해 (ablation) — 하닉 5·20일, 시가진입 ==')
@@ -267,7 +276,7 @@ def main() -> int:
         ep20.append({'day': e_day, 'year': e_day.year, 'r': (cl_h.iloc[e0 + 20] / o_h.iloc[e0] - 1) * 100})
     a_all = np.array([e['r'] for e in ep20])
     # 간격 체크: 에피소드 간 최소 간격 (20거래일 이상 분리 여부)
-    gaps = [np.where(cl_h.index > a['day'])[0][0] - np.where(cl_h.index > b['day'])[0][0]
+    gaps = [np.where(cl_h.index > b['day'])[0][0] - np.where(cl_h.index > a['day'])[0][0]
             for a, b in zip(ep20, ep20[1:])]
     print(f'에피소드 간 최소 간격: {min(gaps)}거래일 (20일 horizon 대비 '
           f'{"충분" if min(gaps) >= 20 else "겹침 — 중복 표본"})')
