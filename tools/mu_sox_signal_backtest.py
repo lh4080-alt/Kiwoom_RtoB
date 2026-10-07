@@ -55,6 +55,14 @@ def load_stock_close(code) -> pd.Series:
     return df.drop_duplicates('dt').set_index('dt')['close'].astype(float)
 
 
+def load_stock_ohlc(code) -> pd.DataFrame:
+    frames = [pd.read_parquet(f) for f in
+              sorted(glob.glob(os.path.join(STOCKS_DIR, code, '*.parquet')))]
+    df = pd.concat(frames)
+    df['dt'] = pd.to_datetime(df['dt'])
+    return df.drop_duplicates('dt').set_index('dt').sort_index()
+
+
 def kr_next(d_iso: str, kr_days: list, kr_set: set) -> str:
     """미국 D일 신호의 한국 실행일 — D보다 늦은 최초 KR 거래일."""
     for k in kr_days:
@@ -164,7 +172,118 @@ def main() -> int:
             cut = p
     print()
     print(f'BH-FDR: p <= {cut:.4f} 유의 ({sum(1 for p in ps if p <= cut)}/{len(ps)}테스트)')
-    print('한계: 삼전·하닉 종가 2021~ → 이벤트도 2021~ 신호만. z는 60일 롤링 point-in-time.')
+
+    # ── 보강 (2026-10-07 Lee 지시 4가지) ─────────────────────────
+    print()
+    print('== 보강 1) 진입 기준 — 실행일 시가 vs 종가 (미국 급락은 한국 시가 갭 반영) ==')
+    rng2 = np.random.default_rng(43)
+    ohlcs = {c: load_stock_ohlc(c) for c in ('005930', '000660')}
+    for code, name in (('005930', '삼성전자'), ('000660', 'SK하이닉스')):
+        o = ohlcs[code]['open'].astype(float)
+        cl = ohlcs[code]['close'].astype(float)
+        o.index = pd.to_datetime(o.index).date
+        cl.index = pd.to_datetime(cl.index).date
+        for h in (5, 20):
+            op_r, cl_r = [], []
+            for ep in episodes:
+                e_day = pd.Timestamp(ep[-1][1]).date()
+                i0 = np.where(cl.index >= e_day)[0]
+                if not len(i0) or i0[0] + h >= len(cl) or cl.index[i0[0]] != e_day:
+                    continue
+                e0 = i0[0]
+                op_r.append((cl.iloc[e0 + h] / o.iloc[e0] - 1) * 100)   # 시가 진입 (실행 가능)
+                cl_r.append((cl.iloc[e0 + h] / cl.iloc[e0] - 1) * 100)  # 종가 진행 (실행 불가 가정)
+            a, b = np.array(op_r), np.array(cl_r)
+            if not len(a):
+                continue
+            bp = np.array([a[rng2.integers(0, len(a), len(a))].mean() for _ in range(2000)])
+            lo, hi = np.percentile(bp, [2.5, 97.5])
+            print(f'{name} h{h}: 시가진입 {a.mean():+.2f}% [{lo:+.2f},{hi:+.2f}] '
+                  f'(n={len(a)}) | 종가진행 {b.mean():+.2f}%')
+
+    print()
+    print('== 보강 2) 대조군 — 기저 수익 & 하닉 자체 낙폭 매칭 ==')
+    cl_h = ohlcs['000660']['close'].astype(float)
+    cl_h.index = pd.to_datetime(cl_h.index).date
+    hi20 = cl_h.pct_change(20) * 100
+    base20 = hi20.dropna()
+    sig_exec = [pd.Timestamp(ep[-1][1]).date() for ep in episodes]
+    sig20 = [hi20.loc[d] for d in sig_exec if d in hi20.index]
+    print(f'하닉 20일 수익 — 전체 기저: {base20.mean():+.2f}% (n={len(base20)}) | '
+          f'신호일: {np.mean(sig20):+.2f}% (n={len(sig20)}) | 초과: {np.mean(sig20) - base20.mean():+.2f}%p')
+    # 낙폭 매칭 대조군 — 신호일 하닉 고점대비(dd250) 분포와 비슷한 날, 신호 없는 날
+    dd250 = (cl_h / cl_h.rolling(250).max() - 1) * 100
+    sig_dd = [dd250.loc[d] for d in sig_exec if d in dd250.index and not pd.isna(dd250.loc[d])]
+    med_dd = np.median(sig_dd)
+    sig_set = set(sig_exec)
+    ctrl = [d for d in dd250.index if d not in sig_set
+            and not pd.isna(dd250.loc[d]) and dd250.loc[d] <= med_dd]
+    ctrl20 = [hi20.loc[d] for d in ctrl if d in hi20.index]
+    print(f'하닉 낙폭 매칭 대조군 (dd<=신호일 중위 {med_dd:.1f}%, 신호 없는 날): '
+          f'20일 수익 {np.mean(ctrl20):+.2f}% (n={len(ctrl20)}) | 신호일 초과: {np.mean(sig20) - np.mean(ctrl20):+.2f}%p')
+
+    print()
+    print('== 보강 3) 조건 분해 (ablation) — 하닉 5·20일, 시가진입 ==')
+    o_h = ohlcs['000660']['open'].astype(float)
+    o_h.index = pd.to_datetime(o_h.index).date
+    for label, cond in (
+            ('MU 단독 (z<=-1.5)', (mu_z <= MU_TH)),
+            ('SOX 단독 (z<=-0.5)', (sox_z <= SOX_TH)),
+            ('결합 (둘 다)', (mu_z <= MU_TH) & (sox_z <= SOX_TH))):
+        days = [d.date().isoformat() for d in us.index[cond.fillna(False)]]
+        eps, cur = [], []
+        for d in days:
+            k = kr_next(d, kr_days, kr_set)
+            if k is None:
+                continue
+            if cur and (pd.Timestamp(d) - pd.Timestamp(cur[-1][0])).days <= 4:
+                cur.append((d, k))
+            else:
+                if cur:
+                    eps.append(cur)
+                cur = [(d, k)]
+        if cur:
+            eps.append(cur)
+        for h in (5, 20):
+            rets = []
+            for ep in eps:
+                e_day = pd.Timestamp(ep[-1][1]).date()
+                i0 = np.where(cl_h.index >= e_day)[0]
+                if not len(i0) or i0[0] + h >= len(cl_h) or cl_h.index[i0[0]] != e_day:
+                    continue
+                rets.append((cl_h.iloc[i0[0] + h] / o_h.iloc[i0[0]] - 1) * 100)
+            if rets:
+                print(f'{label:<22} h{h}: {np.mean(rets):+.2f}% (n={len(rets)})')
+
+    print()
+    print('== 보강 4) 에피소드 의존도 — 하닉 20일 (시가진입) ==')
+    ep20 = []
+    for ep in episodes:
+        e_day = pd.Timestamp(ep[-1][1]).date()
+        i0 = np.where(cl_h.index >= e_day)[0]
+        if not len(i0) or i0[0] + 20 >= len(cl_h) or cl_h.index[i0[0]] != e_day:
+            continue
+        e0 = i0[0]
+        ep20.append({'day': e_day, 'year': e_day.year, 'r': (cl_h.iloc[e0 + 20] / o_h.iloc[e0] - 1) * 100})
+    a_all = np.array([e['r'] for e in ep20])
+    # 간격 체크: 에피소드 간 최소 간격 (20거래일 이상 분리 여부)
+    gaps = [np.where(cl_h.index > a['day'])[0][0] - np.where(cl_h.index > b['day'])[0][0]
+            for a, b in zip(ep20, ep20[1:])]
+    print(f'에피소드 간 최소 간격: {min(gaps)}거래일 (20일 horizon 대비 '
+          f'{"충분" if min(gaps) >= 20 else "겹침 — 중복 표본"})')
+    by_year = {}
+    for e in ep20:
+        by_year.setdefault(e['year'], []).append(e['r'])
+    print('연도별:', {k: f'{np.mean(v):+.1f}%(n={len(v)})' for k, v in sorted(by_year.items())})
+    top2 = sorted(ep20, key=lambda e: -abs(e['r']))[:2]
+    a_ex_top = np.array([e['r'] for e in ep20 if e not in top2])
+    a_ex_22 = np.array([e['r'] for e in ep20 if e['year'] != 2022])
+    print(f'전체: {a_all.mean():+.2f}% (n={len(a_all)}) | 상위2 기여 제외: {a_ex_top.mean():+.2f}% '
+          f'(n={len(a_ex_top)}) | 2022 전체 제외: {a_ex_22.mean():+.2f}% (n={len(a_ex_22)})')
+
+    print()
+    print('해석: 삼성전자는 CI 0 포함 — "미검출". 전방 검증은 연 3~4건이라 수년 소요 —')
+    print('그동안 실매매 없이 알림에 "참고: 과거 n건·결과" 표시 방식.')
     print('섀도 로그는 이후 순수 전방 검증용으로 유지 (소급 검증과 분리).')
     return 0
 
