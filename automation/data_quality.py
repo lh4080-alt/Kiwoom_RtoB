@@ -43,37 +43,27 @@ def _sha256(path: str) -> str:
 
 
 def _selftest() -> list:
-    """앵커 오염 방지 셀프테스트 — 범위 밖 신호가 첫날로 몰리지 않는지."""
+    """앵커 오염 방지 셀프테스트 — 범위 밖 신호(thr < 데이터 시작)는 매칭 0이어야 함."""
     alerts = []
     idx = pd.to_datetime(['2021-01-04', '2021-01-05', '2021-01-06']).date
-    # 범위 이전 신호 → 매칭 없음 (첫날로 몰리면 안 됨 — mu_sox 앵커 버그 패턴)
-    day = idx[0]
-    i0 = [i for i, d in enumerate(idx) if d >= pd.Timestamp('2020-06-01').date()]
-    if i0 and idx[i0[0]] == idx[0]:
-        alerts.append('셀프테스트 실패: 범위 밖 신호가 첫날로 앵커됨 (앵커 오염 패턴)')
-    # 날짜 문자열 정렬 확인
+    thr = pd.Timestamp('2020-06-01').date()  # 데이터 시작보다 이전 신호
+    i0 = [i for i, d in enumerate(idx) if d >= thr]
+    if i0:
+        alerts.append('셀프테스트 실패: 범위 밖 신호가 매칭됨 (앵커 오염 패턴)')
     if sorted(idx) != list(idx):
         alerts.append('셀프테스트 실패: 날짜 정렬 이상')
     return alerts
 
 
-def run_checks() -> dict:
+def run_checks(cross_alerts: list = None) -> dict:
     sys.path.insert(0, BASE)
     from macro_monitor import JSONL_PATH, load_history
-    alerts = _selftest()
+    alerts = _selftest() + list(cross_alerts or [])
     hist = load_history()
     now = datetime.now().isoformat(timespec='seconds')
 
-    # 어제(직전 거래일) 행 대상 교차검증 — asyncio로 ka10059 재조회
-    prev_rows = [r for r in hist if r.get('flows')][-1:] if hist else []
-    if prev_rows:
-        row = prev_rows[0]
-        try:
-            got = _verify_flows(token_holder['token'], row)
-            alerts += got
-        except Exception as e:
-            alerts.append(f'ka10059 교차검증 실패: {e}')
-    else:
+    last = hist[-1] if hist else {}
+    if not any(r.get('flows') for r in hist):
         alerts.append('flows 기록 행 없음 — 소스 누락?')
 
     last = hist[-1] if hist else {}
@@ -144,8 +134,8 @@ def run_checks() -> dict:
 token_holder = {}
 
 
-def _verify_flows(token, row) -> list:
-    """jsonl flows(삼전·하닉 frgnr) vs ka10059 당일 재조회 — 날짜 정렬 교차검증."""
+async def verify_flows_cross(token, row) -> list:
+    """jsonl flows(삼전·하닉 frgnr) vs ka10059 재조회 — 날짜 정렬 교차검증 (async)."""
     from utils.rate_limiter import requests
     import utils.config as config
     alerts = []
@@ -164,14 +154,7 @@ def _verify_flows(token, row) -> list:
                 return float(s) / 100  # 백만원 → 억원
         return None
 
-    async def go():
-        out = {}
-        for code in ('005930', '000660'):
-            out[code] = await fetch(code, row['date'])
-        return out
-
-    import asyncio
-    vals = asyncio.get_event_loop().run_until_complete(go())
+    vals = {code: await fetch(code, row['date']) for code in ('005930', '000660')}
     for code, v in vals.items():
         stored = (row.get('flows') or {}).get(code, {}).get('frgnr')
         if stored is None or v is None:
@@ -184,11 +167,14 @@ def _verify_flows(token, row) -> list:
 if __name__ == '__main__':
     import asyncio
     from modules.semi_trigger.token_provider import get_semi_token
+    from macro_monitor import load_history
 
     async def main():
         token = await get_semi_token()
-        token_holder['token'] = token
-        res = run_checks()
+        flow_rows = [r for r in load_history() if r.get('flows')]
+        cross = (await verify_flows_cross(token, flow_rows[-1])) if flow_rows \
+            else ['flows 행 없음']
+        res = run_checks(cross)
         print(json.dumps(res, ensure_ascii=False, indent=1))
         if res['sent']:
             from telegram.tel_send import tel_send

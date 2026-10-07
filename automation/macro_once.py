@@ -60,8 +60,11 @@ async def run_daily(send_telegram: bool = True) -> int:
     # §8 데이터 품질 점검 (자동 보정 금지 — 이상 시 알림만)
     try:
         import data_quality
-        data_quality.token_holder['token'] = token
-        q = data_quality.run_checks()
+        from macro_monitor import load_history
+        flow_rows = [r for r in load_history() if r.get('flows')]
+        cross = (await data_quality.verify_flows_cross(token, flow_rows[-1])) \
+            if flow_rows else ['flows 행 없음']
+        q = data_quality.run_checks(cross)
         if q['sent']:
             from telegram.tel_send import tel_send
             await tel_send('⚠️ [품질점검] ' + ' | '.join(q['sent']))
