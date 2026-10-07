@@ -43,10 +43,10 @@ def _sha256(path: str) -> str:
 
 
 def _selftest() -> list:
-    """앵커 오염 방지 셀프테스트 — 범위 밖 신호(thr < 데이터 시작)는 매칭 0이어야 함."""
+    """앵커 오염 방지 셀프테스트 — 데이터 범위 밖(이후) 신호는 매칭 0이어야 함."""
     alerts = []
     idx = pd.to_datetime(['2021-01-04', '2021-01-05', '2021-01-06']).date
-    thr = pd.Timestamp('2020-06-01').date()  # 데이터 시작보다 이전 신호
+    thr = pd.Timestamp('2021-06-01').date()  # 데이터 범위 이후 신호 — 앵커되면 오염
     i0 = [i for i, d in enumerate(idx) if d >= thr]
     if i0:
         alerts.append('셀프테스트 실패: 범위 밖 신호가 매칭됨 (앵커 오염 패턴)')
