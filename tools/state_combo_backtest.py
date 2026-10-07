@@ -130,6 +130,65 @@ def main() -> int:
 
     print()
     print('[4-1] 홀드아웃은 최종 확정 시점에 1회만 개봉 (지시서 규칙). 본 출력은 학습 표본만.')
+
+    # ── v2 보강 (2026-10-07 Lee 지시): BH-FDR 보정 + 에피소드/유효 표본 분석 ──
+    rng = np.random.default_rng(7)
+    print()
+    print('== 보강 1) r20 유의 후보 셀의 에피소드 분석 (유효 표본) ==')
+    print('   에피소드 = 같은 조합이 연속인 구간. 연속일이 한 덩어리면 표본이 아니라 1개 이벤트.')
+    print(f'{"조합":<30}{"n":>5}{"에피소드":>7}{"평균길이":>7}{"연도":<24}{"r20":>8}{"상위2제외 r20":>13}  유지?')
+    print('-' * 110)
+
+    combo = (df_learn['axis1'] + '|' + df_learn['axis2'] + '|' + df_learn['axis3'] + '|'
+             + df_learn['axis4'])
+    ep_id = (combo != combo.shift()).cumsum()
+
+    cell_p = []
+    cell_info = {}
+    for key, g in groups:
+        if len(g) < MIN_N:
+            continue
+        vals = g['r20'].dropna().values
+        if len(vals) < MIN_N:
+            continue
+        boots = []
+        for _ in range(N_BOOT):
+            idx = rng.integers(0, len(vals), len(vals))
+            boots.append(np.nanmean(vals[idx]))
+        boots = np.array(boots)
+        p = 2 * min((boots <= 0).mean(), (boots >= 0).mean())
+        cell_p.append(p)
+        cell_info[key] = {'g': g, 'p': p, 'boots': boots}
+
+    # BH-FDR
+    ps = np.array(sorted(cell_p))
+    cut = 0
+    for i, p in enumerate(ps):
+        if p <= 0.05 * (i + 1) / len(ps):
+            cut = p
+    print(f'BH-FDR 임계 p <= {cut:.4f} (34셀 중 유의: {sum(1 for p in cell_p if p <= cut)}개)')
+
+    for key, info in cell_info.items():
+        g = info['g']
+        label = '/'.join(str(k) for k in key)
+        mask = (combo == '|'.join(str(k) for k in key))
+        sub = df_learn[mask]
+        eps = sub.groupby(ep_id[mask])
+        ep_days = [len(gg) for _, gg in eps]
+        ep_years = sorted({gg.index.year.min() for _, gg in eps})
+        # 상위 2 에피소드(최장) 제외
+        ep_frames = [(len(gg), gg.index.min(), gg.index.max()) for _, gg in eps]
+        ep_frames.sort(reverse=True)
+        keep = sub.copy()
+        for ln, t0, t1 in ep_frames[:2]:
+            keep = keep[~((keep.index >= t0) & (keep.index <= t1))]
+        m_all, m_ex = g['r20'].mean(), keep['r20'].mean() if len(keep) else np.nan
+        keep_q = '유지' if (m_all < 0) == (m_ex < 0) and abs(m_ex) > abs(m_all) * 0.5 else '반감/반전'
+        yrs_s = ','.join(str(y)[-2:] for y in ep_years[:8]) + ('…' if len(ep_years) > 8 else '')
+        print(f'{label:<30}{len(g):>5}{len(ep_days):>7}{np.mean(ep_days):>7.1f}{yrs_s:<24}'
+              f'{m_all:>+8.2f}{m_ex:>+13.2f}  {keep_q}')
+    print()
+    print('보강 기준: 상위 2 에피소드 제외 후에도 부호·크기 유지되어야 "에피소드 의존 아님".')
     return 0
 
 
