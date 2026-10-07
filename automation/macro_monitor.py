@@ -49,7 +49,7 @@ SYM_KOSPI = '^KS11'
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 JSONL_PATH = os.path.join(BASE_DIR, 'config', 'data', 'macro_monitor.jsonl')
-KOSPI_OHLC_PATH = os.path.join(BASE_DIR, '..', 'config', 'data', 'kospi_daily_ohlc.parquet')
+KOSPI_OHLC_PATH = os.path.join(BASE_DIR, 'config', 'data', 'kospi_daily_ohlc.parquet')
 
 CORR_WINDOW = 60  # 상관 윈도 (거래일)
 
