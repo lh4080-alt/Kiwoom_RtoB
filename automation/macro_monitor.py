@@ -531,6 +531,19 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
     except Exception:
         logger.exception('[macro] ka10066 수급 수집 실패')
 
+    # ka10066은 16:50 시점에 당일 KRX 집계가 미반영된 '전일 거래일 확정분'을 반환
+    # (2026-10-07 검증: jsonl 9/17 flows = ka10059 9/16, 10/6 기록 = 10/2 분).
+    # → 전일 거래일 행에 기록 (당일 행 오염 방지 — kospi_r T+1 사고와 동족 문제)
+    prev_trade = None
+    for k in sorted(kospi_closes.keys(), reverse=True):
+        if k.replace('-', '') < today:
+            prev_trade = k.replace('-', '')
+            break
+    if prev_trade and (flows or foreign_net is not None):
+        upsert_daily_record({'date': prev_trade,
+                             'flows': flows or None,
+                             'foreign_net_eok': foreign_net})
+
     record = {
         'date': today,
         'generated_at': datetime.now().isoformat(timespec='seconds'),
@@ -549,8 +562,6 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
         'regime': regime,
         'short_term': short_term,
         'breadth': breadth,
-        'flows': flows,
-        'foreign_net_eok': foreign_net,
     }
 
     # 5) 60일 상관 (히스토리 충분할 때만)
