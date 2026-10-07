@@ -127,6 +127,8 @@ def main() -> int:
                 if len(i0) == 0 or i0[0] + h >= len(s):
                     continue
                 e0 = i0[0]
+                if s.index[e0] != e_day:
+                    continue  # 실행일 데이터 없음 (2021 이전 신호) — 앵커 오염 방지
                 rets.append((s.iloc[e0 + h] / s.iloc[e0] - 1) * 100)
             a = np.array(rets)
             if len(a) < 5:
