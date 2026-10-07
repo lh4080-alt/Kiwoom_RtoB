@@ -642,6 +642,9 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
         record['axes_signal'] = f_rec.get('signal_mu_sox')
     except Exception:
         logger.exception('[macro] 4축·전방 로그 실패 — 무영향')
+    # 국면 계산에 실제 사용한 마지막 봉 — §8 창 지연 감지용 (10/6 사고 계기)
+    if kospi_closes:
+        record['kospi_closes_last'] = max(kospi_closes.keys())
 
     # 5) 60일 상관 (히스토리 충분할 때만)
     upsert_daily_record(record)

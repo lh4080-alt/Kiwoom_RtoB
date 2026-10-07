@@ -103,6 +103,38 @@ def run_checks(cross_alerts: list = None) -> dict:
         if lag > 4:
             alerts.append(f'하트비트: 마지막 기록 {last["date"]} — {lag}일 경과')
 
+    # 신선도 검사 (2026-10-07 breadth 3주 동결 사고) — 산출물 최신 날짜 = 직전 거래일
+    try:
+        ohlc = pd.read_parquet(os.path.join(DATA, 'kospi_daily_ohlc.parquet'))
+        prev_trade = ohlc.index[ohlc.index < pd.Timestamp(pd.Timestamp.now().date())].max()
+        for label, fpath in (('breadth 패널', os.path.join(DATA, 'breadth_close_panel.parquet')),
+                             ('kospi parquet', os.path.join(DATA, 'kospi_daily_ohlc.parquet'))):
+            if os.path.exists(fpath):
+                last_d = pd.read_parquet(fpath).index.max()
+                if last_d < prev_trade:
+                    alerts.append(f'신선도: {label} 최신 {last_d.date()} < 직전 거래일 {prev_trade.date()} '
+                                  '— 재빌드/스케줄 사망 의심')
+        fwd = os.path.join(DATA, 'forward_log.jsonl')
+        if os.path.exists(fwd):
+            last_f = [json.loads(l) for l in open(fwd, encoding='utf-8')][-1]
+            if last_f['date'] < prev_trade.strftime('%Y%m%d'):
+                alerts.append(f'신선도: forward_log 최신 {last_f["date"]} < 직전 거래일')
+    except Exception as e:
+        alerts.append(f'신선도 검사 실패: {e}')
+
+    # T+1 결측 감지 (10/6 케이스 재현 — ka20006 당일 봉 결측 시 국면이 오래된 창으로 계산됨)
+    last_k = last.get('kospi_closes_last')
+    if last_k:
+        last_kd = pd.Timestamp(last_k)
+        try:
+            ohlc2 = pd.read_parquet(os.path.join(DATA, 'kospi_daily_ohlc.parquet'))
+            prev_trade2 = ohlc2.index[ohlc2.index < pd.Timestamp(pd.Timestamp.now().date())].max()
+            if last_kd < prev_trade2:
+                alerts.append(f'국면 창 지연: kospi 계산 마지막 봉 {last_k} < 직전 거래일 '
+                              f'{prev_trade2.date()} — 당일 봉 결측, 익일 소급 대기')
+        except Exception:
+            pass
+
     # 중복 억제
     state = {}
     if os.path.exists(STATE_PATH):

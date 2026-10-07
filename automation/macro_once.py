@@ -57,6 +57,16 @@ async def run_daily(send_telegram: bool = True) -> int:
             pass  # 대시보드 첨부 실패해도 리포트는 이미 발송됨
     print(f"[macro_once] daily 완료 {datetime.now().isoformat(timespec='seconds')} "
           f"missing={missing or 'none'}")
+    # 종목별 수급 증분 — 어제분 ka10059 확정치 (4축 ③ 괴리 근거, ka10059는 §4-1 검증 소스)
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                        '..', 'tools'))
+        from backfill_stock_flows import main as flows_main
+        yday = (datetime.now() - timedelta(days=1)).strftime('%Y%m%d')
+        await flows_main(yday)
+    except Exception:
+        print('[macro_once] stock_flows 증분 실패 — 무영향')
+
     # §8 데이터 품질 점검 (자동 보정 금지 — 이상 시 알림만)
     try:
         import data_quality

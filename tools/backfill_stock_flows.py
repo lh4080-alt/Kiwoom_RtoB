@@ -52,14 +52,14 @@ async def fetch_day(token, code, d):
     return None
 
 
-async def main() -> int:
+async def main(start: str = None) -> int:
     from modules.semi_trigger.token_provider import get_semi_token
     token = await get_semi_token()
     if not token:
         print('[stock_flows] 토큰 발급 실패')
         return 1
 
-    start = sys.argv[1] if len(sys.argv) > 1 else '20100104'
+    start = start or (sys.argv[1] if len(sys.argv) > 1 else '20100104')
     ohlc = pd.read_parquet(OHLC_PATH)
     # 확정치만: 오늘 제외 (장 마감 후 갱신분만 저장 — 지시서 §5)
     today = datetime.now().strftime('%Y%m%d')
