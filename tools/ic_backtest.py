@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.join(BASE, '..', 'automation'))
 OHLC_PATH = os.path.join(BASE, '..', 'config', 'data', 'kospi_daily_ohlc.parquet')
 PANEL_PATH = os.path.join(BASE, '..', 'config', 'data', 'breadth_close_panel.parquet')
 FLOWS_PATH = os.path.join(BASE, '..', 'config', 'data', 'investor_flows.parquet')
+STOCK_FLOWS_PATH = os.path.join(BASE, '..', 'config', 'data', 'stock_flows.parquet')
 FULL_PANEL_PATH = os.path.join(BASE, '..', 'config', 'data', 'breadth_panel_full.parquet')
 
 HORIZONS = (1, 5, 10)
@@ -265,15 +266,26 @@ async def main() -> int:
         for k in [k for k in list(all_ind) if k.startswith('[breadth] ')]:
             del all_ind[k]
 
-    if os.path.exists(FLOWS_PATH):
-        flows = pd.read_parquet(FLOWS_PATH)
-        flows.index = pd.to_datetime(flows.index, format='%Y%m%d')
-        f_ind = flow_indicators(flows)
-        for name in f_ind.columns:
-            all_ind[f'[수급] {name}'] = f_ind[name]
-        print(f'[ic] 투자자 수급: {len(flows)}일')
+    # 수급 지표 — ka10059 종목별(검증됨 2026-10-07). ka10051 백필은 매칭 불가로 폐기.
+    if os.path.exists(STOCK_FLOWS_PATH):
+        sf = pd.read_parquet(STOCK_FLOWS_PATH)
+        sf.index = pd.to_datetime(sf.index, format='%Y%m%d')
+        s_frgn = (sf['005930_frgnr'] + sf['000660_frgnr']) / 2
+        s_orgn = (sf['005930_orgn'] + sf['000660_orgn']) / 2
+        s_ind = (sf['005930_ind'] + sf['000660_ind']) / 2
+        fi = pd.DataFrame(index=sf.index)
+        fi['semi_frgnr_net'] = s_frgn
+        fi['semi_frgnr_cum20'] = s_frgn.rolling(20).sum()
+        fi['semi_orgn_cum20'] = s_orgn.rolling(20).sum()
+        fi['semi_ind_net'] = s_ind
+        fi['semi_frgnr_minus_orgn'] = s_frgn - s_orgn
+        fi['samsung_frgnr_net'] = sf['005930_frgnr']
+        fi['hynix_frgnr_net'] = sf['000660_frgnr']
+        for name in fi.columns:
+            all_ind[f'[수급59] {name}'] = fi[name]
+        print(f'[ic] 종목별 수급(ka10059, 검증됨): {len(sf)}일')
     else:
-        print('[ic] 투자자 수급 없음 — 스킵')
+        print('[ic] 종목별 수급 없음 — 스킵')
 
     try:
         m_ind = await macro_indicators_15y()
