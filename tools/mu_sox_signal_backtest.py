@@ -114,6 +114,17 @@ def main() -> int:
 
     closes = {c: load_stock_close(c) for c in ('005930', '000660')}
     rng = np.random.default_rng(42)
+    # 에피소드 연도 분포 (2021~ 실행 가능분)
+    ep_years = []
+    for ep in episodes:
+        e_day = pd.Timestamp(ep[-1][1]).date()
+        s0 = closes['005930']
+        s0.index = pd.to_datetime(s0.index).date
+        i0 = np.where(s0.index >= e_day)[0]
+        if len(i0) and s0.index[i0[0]] == e_day:
+            ep_years.append(e_day.year)
+    from collections import Counter
+    print('에피소드 연도 분포 (실행 가능):', dict(sorted(Counter(ep_years).items())))
     ps = []
     rows = []
     for code, name in (('005930', '삼성전자'), ('000660', 'SK하이닉스')):
