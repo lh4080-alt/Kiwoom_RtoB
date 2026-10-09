@@ -174,13 +174,13 @@ def stock_universe() -> set:
 def breadth_frame(p: date, official: dict = None, universe: set = None) -> pd.DataFrame:
     """폭 정의 v2 시계열 — 유니버스 = 패널 ∩ KRX 상장 주권 (ETF·ETN 제외).
 
-    P일 행은 ka10066 KRX 확정 종가로 대체하고 (MDC 최종일은 15:35 잠정), P일 상승·하락은
-    KRX 공식 등락률(기준가 대비)로 집계한다. P 이전 행은 MDC 확정값 (V1 표본 1,742건 0원 일치).
-    A/D 누적 기준점 = 패널 첫날 (brief_config.AD_ORIGIN). MDC 파일은 읽기만 한다.
+    원천: ka10081 수정주가 장기 패널 (2014-07~, brief_config.BREADTH_PANEL). MDC 패널은 액면분할·
+    병합 이후 과거값이 수정되지 않아(예: 067390 10배) 폐기 (2026-10-09). P일 행은 ka10066 KRX
+    확정 종가로 대체하고, P일 상승·하락은 KRX 공식 등락률(기준가 대비)로 집계한다.
     한계: 유니버스는 현재 상장 주권 — 과거 상장폐지 종목 누락(생존편향).
     """
     from market_breadth import pct_above_ma200
-    panel = pd.read_parquet(os.path.join(DATA, 'breadth_close_panel.parquet'))
+    panel = pd.read_parquet(os.path.join(DATA, cfg.BREADTH_PANEL))
     universe = universe if universe is not None else stock_universe()
     codes = [c for c in panel.columns if c in universe]
     pnl = panel[codes].copy()
@@ -202,6 +202,28 @@ def breadth_frame(p: date, official: dict = None, universe: set = None) -> pd.Da
     out['pct_above200'] = pct_above_ma200(pnl)
     out['universe'] = len(codes)
     return out
+
+
+def persist_official_row(official: dict, p: date):
+    """P일 ka10066 확정 종가를 k81 패널에 기록 (다음날 이력용). 주간 갱신이 수정주가로 덮어씀."""
+    path = os.path.join(DATA, cfg.BREADTH_PANEL)
+    panel = pd.read_parquet(path)
+    row = pd.Series({c: official['codes'][c]['px'] for c in panel.columns if c in official['codes']})
+    panel.loc[pd.Timestamp(p)] = row.reindex(panel.columns)
+    panel.sort_index().to_parquet(path + '.tmp')
+    os.replace(path + '.tmp', path)
+
+
+def direction_base(k_close: pd.Series, p: date, h: int = 20) -> dict:
+    """방향 층 — 검증 통과 변수 없음(2026-10-09 IC 11후보 전부 미통과)이라 기저 확률만.
+
+    기저 = 2014-07 ~ P에서 20거래일 수익이 확정된 날까지의 KOSPI 20일 상승 비율·평균 수익.
+    """
+    s = k_close[[d <= p for d in k_close.index]]
+    y = (s.shift(-h) / s - 1) * 100
+    y = y[[d >= pd.Timestamp(cfg.AD_ORIGIN).date() for d in y.index]].dropna()
+    return {'up': float((y > 0).mean() * 100), 'mean': float(y.mean()), 'n': int(len(y)),
+            'since': y.index[0]}
 
 
 def breadth_confirmed(official: dict, p: date, universe: set = None) -> dict:
@@ -313,6 +335,7 @@ async def collect(now_kst: datetime = None) -> dict:
         else:
             break
     d['regime'] = {**reg, 'dur': dur}
+    d['direction'] = direction_base(k['close'].astype(float), p)
     ax = adx_atr(k)
     atr_s = (ax['atr'] / k['close'] * 100).dropna()
     d['atr'] = {'pct': float(atr_s.iloc[-1]), 'pctile': pctile_strict(atr_s, float(atr_s.iloc[-1]))}
@@ -381,6 +404,9 @@ def render(d: dict, state: dict = None, failures: list = None) -> str:
         f"📊 [일일 브리프] US {sf['d_last']:%m/%d} 세션 → KR 실행 {sf['exec']:%m/%d} "
         f"({kind} · 미국 {len(sf['closed'])}/{sf['total']}세션 반영)",
         dca_line(sf['exec'], d['trigger'], sam['z'], state or {}),
+        (f"📐 방향(20일): 검증 통과 변수 없음 · 기저 상승확률 {d['direction']['up']:.0f}% · "
+         f"평균 {d['direction']['mean']:+.1f}% ({d['direction']['since']:%Y}~)"
+         if d.get('direction') else '📐 방향(20일): 미산출'),
         '',
         '━ 시장 국면 (KOSPI) ━',
         f"국면 {r['label']} {r['dur']}일 · 고점 대비 {pct(r['dd'])} · 3개월 {pct(r['mom'])}"

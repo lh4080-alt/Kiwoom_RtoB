@@ -69,6 +69,14 @@ async def main() -> int:
     if cfg.BRIEF_SEND:
         from telegram.tel_send import tel_send
         await tel_send(text)
+    # P일 확정 종가를 k81 폭 패널에 기록 (실시간 실행만 — 재생·드라이런 제외)
+    if not d.get('replay'):
+        try:
+            from brief.build import ka10066_official, persist_official_row, stock_universe
+            from modules.semi_trigger.token_provider import get_semi_token as _gt
+            persist_official_row(await ka10066_official(await _gt(), stock_universe()), sf['prev_kr'])
+        except Exception as e:
+            print(f'[brief] k81 패널 기록 실패: {e}')
 
     # 예상 갭 사후 기록 + 회차 상태
     pred_like = {'exec': sf['exec'], 'sessions': d['sessions_used'],

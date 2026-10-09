@@ -47,6 +47,32 @@ def save(cols: dict):
     df.sort_index().to_parquet(OUT)
 
 
+async def refresh(token, fn, cols: dict) -> dict:
+    """주간 갱신 — 기존 종목은 최근 600봉 재조회. 겹치는 구간의 비율이 1이 아니면(수정주가 변경)
+    전체 이력을 다시 받는다. 신규 상장 주권은 전체 수집."""
+    from brief.build import stock_universe
+    univ = sorted(stock_universe())
+    stats = {'refetch': 0, 'new': 0, 'ok': 0}
+    for i, code in enumerate(univ):
+        if code not in cols:
+            cols[code] = await fetch_code(code, token, fn)
+            stats['new'] += 1
+            continue
+        r = await fn(code, base_dt=datetime.now().strftime('%Y%m%d'), token=token, silent=True)
+        recent = {str(c['date']): float(c['close']) for c in r.get('candles', []) if c.get('close')}
+        common = [d for d in recent if d in cols[code]]
+        if common and any(abs(recent[d] - cols[code][d]) > 0 for d in common):
+            cols[code] = await fetch_code(code, token, fn)
+            stats['refetch'] += 1
+        else:
+            cols[code].update(recent)
+            stats['ok'] += 1
+        if (i + 1) % 500 == 0:
+            print(f'[k81 refresh] {i + 1}/{len(univ)} {stats}', flush=True)
+    print(f'[k81 refresh] 완료 {stats}', flush=True)
+    return cols
+
+
 async def main() -> int:
     from api.daily_candle import fn_ka10081
     from brief.build import stock_universe
@@ -58,6 +84,9 @@ async def main() -> int:
         old = pd.read_parquet(OUT)
         cols = {c: {d.strftime('%Y%m%d'): v for d, v in old[c].dropna().items()} for c in old.columns}
         print(f'[k81] 재개 — 기존 {len(cols)}종목')
+    if '--refresh' in sys.argv:
+        save(await refresh(token, fn_ka10081, cols))
+        return 0
     todo = [c for c in codes if c not in cols]
     print(f'[k81] 대상 {len(codes)} | 남은 {len(todo)}', flush=True)
     fails = []

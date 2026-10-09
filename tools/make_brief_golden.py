@@ -73,7 +73,7 @@ def verify(d: dict) -> list:
         add(f'{code} 가중 US 누적(%)', d['semi'][code]['x'], float(hand), 0.02)
     # 200일선 위 비율 — numpy 독립 재구현 (같은 원천, 다른 구현)
     from brief.build import stock_universe
-    panel = pd.read_parquet(os.path.join(ROOT, 'config', 'data', 'breadth_close_panel.parquet'))
+    panel = pd.read_parquet(os.path.join(ROOT, 'config', 'data', cfg.BREADTH_PANEL))
     univ = stock_universe()
     cols = [c for c in panel.columns if c in univ]
     arr = panel[cols].copy()
