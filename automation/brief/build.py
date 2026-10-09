@@ -205,6 +205,7 @@ def breadth_frame(p: date, official: dict = None, universe: set = None) -> pd.Da
 
 
 def breadth_confirmed(official: dict, p: date, universe: set = None) -> dict:
+    """official=None이면 대체 없이 패널 그대로 (재생 시 P 행은 이미 MDC 확정값)."""
     f = breadth_frame(p, official, universe)
     last = f.iloc[-1]
     return {'pct_above200': float(last['pct_above200']), 'ad_cum': float(last['ad_cum']),
@@ -219,8 +220,11 @@ def market_foreign_z(official_frgn_eok: float, p: date) -> dict:
         return {'z20': None, 'z60': None, 'last': None, 'n': 0}
     s = pd.read_parquet(path)['frgn_eok']
     s.index = [d.date() for d in pd.DatetimeIndex(s.index)]
-    s = s[[d < p for d in s.index]]
-    s.loc[p] = official_frgn_eok      # 최종 세션은 ka10066 확정 합
+    if official_frgn_eok is None:      # 재생 — P까지 ka10059 합산(확정) 그대로
+        s = s[[d <= p for d in s.index]]
+    else:
+        s = s[[d < p for d in s.index]]
+        s.loc[p] = official_frgn_eok  # 최종 세션은 ka10066 확정 합
     s = s.sort_index()
     out = {'last': float(s.iloc[-1]), 'n': int(len(s)), 'last_date': s.index[-1]}
     for w in (20, 60):
@@ -293,9 +297,13 @@ async def collect(now_kst: datetime = None) -> dict:
 
     # 폭 + 외인 시장 (ka10066 확정)
     univ = stock_universe()
-    off = await ka10066_official(token, univ)
+    # ka10066은 항상 '실제 최신 세션' 확정값 — 과거 시점 재생(골든 테스트)에서 P가 최신 세션이
+    # 아니면 대체하지 않는다 (P 이전 MDC 행·ka10059 합산은 이미 확정값)
+    live_p = session_frame(datetime.now(KST))['prev_kr']
+    off = await ka10066_official(token, univ) if p == live_p else None
+    d['replay'] = p != live_p
     d['breadth'] = breadth_confirmed(off, p, univ)
-    d['foreign'] = market_foreign_z(off['kospi_frgn_eok'], p)
+    d['foreign'] = market_foreign_z(off['kospi_frgn_eok'] if off else None, p)
 
     # 미10Y·원달러
     tnx = yf.Ticker('^TNX').history(period='3mo', interval='1d')['Close']
