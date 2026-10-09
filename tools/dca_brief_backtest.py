@@ -13,7 +13,7 @@
   국면    직전 KR 거래일 KOSPI로 compute_regime (point-in-time). 사전 선언 2안:
           역추세 {강세장 0.75, 보합·전환기 1.0, 하락장 1.25} / 추세추종 {1.25, 1.0, 0.75}
           지표: 평균단가, 최종 평가액/투입액, 최저 평가손익률(= min(평가액/누적투입 − 1))
-데이터: KR pykrx 수정주가(V1 ka10081 대조 0원), 미국 yfinance(V1 Nasdaq 대조), KOSPI ka20006 parquet.
+데이터: KR pykrx 수정주가(V1 ka10081 대조 0원 — 원천이 2014-07-16부터라 기간 한계), 미국 yfinance(V1 Nasdaq 대조), KOSPI ka20006 parquet.
 """
 import os
 import sys
@@ -146,11 +146,14 @@ def main() -> int:
     print(f'  평균단가 정기 {ap_reg:,.0f}원 | 당김 {ap_pull:,.0f}원 | 차이 {(ap_pull / ap_reg - 1) * 100:+.2f}%')
     print(f'  순열(같은 주기 정기일 이전 무작위일) 평균단가 중앙 {np.median(null):,.0f}원 '
           f'[{np.percentile(null, 2.5):,.0f}~{np.percentile(null, 97.5):,.0f}] → p={p:.4f} (단측)')
-    for label, lo, hi in (('2012~2019', date(2012, 1, 1), date(2019, 12, 31)),
+    # 구간 분할은 주기(정기일) 기준 — 매수일 기준이면 경계에서 당김일이 이전 구간으로 넘어가
+    # 두 전략의 구간별 매수 횟수가 달라져 비교가 어긋남 (2026-10-09 수정)
+    pairs = list(zip([s for _, (s, _) in sorted(sch.items())], reg_buys, pull_buys))
+    for label, lo, hi in (('~2019', date(2000, 1, 1), date(2019, 12, 31)),
                           ('2020~', date(2020, 1, 1), date(2099, 1, 1))):
-        rb = [d for d in reg_buys if lo <= d <= hi]
-        pb = [d for d in pull_buys if lo <= d <= hi]
-        print(f'  [{label}] 정기 {avg_price(rb, op):,.0f} | 당김 {avg_price(pb, op):,.0f} | '
+        sub = [(r, q) for s_, r, q in pairs if lo <= s_ <= hi]
+        rb, pb = [r for r, _ in sub], [q for _, q in sub]
+        print(f'  [{label}] 주기 {len(sub)} | 정기 {avg_price(rb, op):,.0f} | 당김 {avg_price(pb, op):,.0f} | '
               f'차이 {(avg_price(pb, op) / avg_price(rb, op) - 1) * 100:+.2f}%')
 
     # ── B) 국면별 비중 ON/OFF (정기 일정, 양 종목) ──
