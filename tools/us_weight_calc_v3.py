@@ -109,7 +109,7 @@ def main() -> int:
         for _, r in d.iterrows():
             wret = r['MU'] * ws['MU'] + (0 if pd.isna(r['SNDK']) else r['SNDK'] * ws['SNDK'])
             mask.append(bool((z_mu.get(r['us_date'], 0) or 0) <= -1.3 or wret <= -3.5))
-        al.loc[al['code'] == code, 'trig'] = mask
+        al.loc[sub_idx := d.index, 'trig'] = pd.Series(mask, index=d.index)
 
     # ── 1) 기저 대조 + 블록 부트스트랩 (5일) ──
     print('== 1) 기저 대조 + 5일 블록 부트스트랩 ==')
