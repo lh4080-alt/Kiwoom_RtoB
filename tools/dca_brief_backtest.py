@@ -41,9 +41,17 @@ def load():
     import yfinance as yf
     kr = {}
     for code in ('005930', '000660'):
-        px = stock.get_market_ohlcv(START, date.today().strftime('%Y%m%d'), code, adjusted=True)
+        # pykrx(네이버 원천)는 1회 약 3,000행 제한 — 구간을 나눠 받아 병합
+        parts = []
+        for a, b in (('20120101', '20171231'), ('20180101', date.today().strftime('%Y%m%d'))):
+            px = stock.get_market_ohlcv(a, b, code, adjusted=True)
+            parts.append(px)
+        px = pd.concat(parts)
+        px = px[~px.index.duplicated()].sort_index()
         px.index = [d.date() for d in pd.DatetimeIndex(px.index)]
-        kr[code] = px[['시가', '종가']].rename(columns={'시가': 'open', '종가': 'close'}).astype(float)
+        px = px[['시가', '종가']].rename(columns={'시가': 'open', '종가': 'close'}).astype(float)
+        # 시가 0 = 거래정지일 (예: 삼전 2018 액면분할) → 매수 불가일로 제외
+        kr[code] = px[(px['open'] > 0) & (px['close'] > 0)]
     us = {}
     for s in ('MU', 'SNDK'):
         h = yf.Ticker(s).history(period='max', interval='1d', auto_adjust=True)['Close']
@@ -88,8 +96,12 @@ def schedule(kr_days: list) -> dict:
     out = {}
     for c, days in cyc.items():
         s = scheduled_exec(c)
-        if s in days:
-            out[c] = (s, [d for d in days if d < s])
+        if s not in days:          # 정기일이 거래정지일 → 같은 주기 다음 매수 가능일
+            later = [d for d in days if d > s]
+            if not later:
+                continue
+            s = later[0]
+        out[c] = (s, [d for d in days if d < s])
     return out
 
 
