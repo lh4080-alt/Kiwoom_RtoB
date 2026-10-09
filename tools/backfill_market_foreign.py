@@ -6,7 +6,7 @@ ka10059 종목별 외인 순매수를 KOSPI 전 종목 합산해 시장 합계�
   · 검증 1: 최종 세션 — Σ ka10059(종목별) vs ka10066 시장 합계 (같은 1,308종목, 같은 정의)
   · 검증 2: 종목 단위 — 최종 세션 ka10059 vs ka10066 종목별 값 일치율
   · 산출: config/data/market_foreign.parquet (date, frgn_eok, n_codes) — 약 100거래일
-정의: 외국인(기타외국인 제외) = frgnr_invsr, 금액 백만원 → 억원 (/100)
+정의: 외국인(기타외국인 제외) = frgnr_invsr, KOSPI 상장 주권만(ETF·ETN 제외), 백만원 → 억원 (/100)
 """
 import asyncio
 import json
@@ -51,7 +51,10 @@ async def main() -> int:
         cont, nk = r.headers.get('cont-yn', 'N'), r.headers.get('next-key', '')
         if cont != 'Y':
             break
-    f66 = {str(x['stk_cd']).strip(): _num(x['frgnr_invsr']) for x in rows66}
+    from brief.build import stock_universe
+    univ = stock_universe()          # KRX 상장 주권 — ETN 제외 (ka10066 KOSPI 1,308 중 ETN 포함)
+    f66 = {str(x['stk_cd']).strip(): _num(x['frgnr_invsr']) for x in rows66
+           if str(x['stk_cd']).strip() in univ}
     codes = sorted(f66)
     sum66 = sum(f66.values()) / 100
     print(f'[ka10066] KOSPI {len(codes)}종목 | 시장 외인 합 {sum66:+,.1f}억')

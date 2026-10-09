@@ -92,8 +92,8 @@ def lag_tag(src_date: date, expected: date) -> str:
 
 
 # ── 데이터 수집 ──────────────────────────────────────────────
-async def ka10066_official(token) -> dict:
-    """장마감후 KRX 확정 — {code: {'px', 'flu', 'frgn'}} (KOSPI·KOSDAQ), KOSPI 외인 합."""
+async def ka10066_official(token, universe: set = None) -> dict:
+    """장마감후 KRX 확정 — {code: {'px', 'flu'}} (KOSPI·KOSDAQ), KOSPI 주권 외인 합 (ETN 제외)."""
     from utils.rate_limiter import requests as kreq
     import utils.config as config
 
@@ -118,7 +118,7 @@ async def ka10066_official(token) -> dict:
             for x in (r.json() or {}).get('opaf_invsr_trde') or []:
                 c = str(x['stk_cd']).strip()
                 out[c] = {'px': abs(num(x['cur_prc'])), 'flu': num(x['flu_rt'])}
-                if mkt == '001':
+                if mkt == '001' and (universe is None or c in universe):
                     kospi_frgn += num(x['frgnr_invsr'])
             cont, nk = r.headers.get('cont-yn', 'N'), r.headers.get('next-key', '')
             if cont != 'Y':
@@ -144,11 +144,39 @@ async def stock_flows_20d(token, code: str) -> pd.Series:
     return s.sort_index()
 
 
-def breadth_confirmed(official: dict, p: date) -> dict:
-    """폭 정의 v2 — 유니버스 ka10066 고정, P일 행은 KRX 확정 종가로 대체 (MDC 파일 미변경)."""
+UNIVERSE_CACHE = os.path.join(DATA, 'brief', 'universe_stocks.json')
+
+
+def stock_universe() -> set:
+    """KRX 상장 주권 (KOSPI·KOSDAQ·KOSDAQ GLOBAL) — ETF·ETN 제외 판별용 회원 목록.
+
+    MDC 패널에 ETF·ETN 1,281개, ka10066에 ETN 368개가 섞여 있어 (CD금리·머니마켓 ETF는 매일
+    상승) 폭 지표가 위로 왜곡됐음 (2026-10-09 발견). 하루 1회 캐시, 조회 실패 시 직전 캐시.
+    """
+    try:
+        if os.path.exists(UNIVERSE_CACHE):
+            c = json.load(open(UNIVERSE_CACHE, encoding='utf-8'))
+            if c.get('date') == date.today().isoformat():
+                return set(c['codes'])
+        import FinanceDataReader as fdr
+        L = fdr.StockListing('KRX')
+        codes = sorted(L[L['Market'].isin(['KOSPI', 'KOSDAQ', 'KOSDAQ GLOBAL'])]['Code'])
+        os.makedirs(os.path.dirname(UNIVERSE_CACHE), exist_ok=True)
+        json.dump({'date': date.today().isoformat(), 'codes': codes},
+                  open(UNIVERSE_CACHE, 'w', encoding='utf-8'))
+        return set(codes)
+    except Exception:
+        if os.path.exists(UNIVERSE_CACHE):
+            return set(json.load(open(UNIVERSE_CACHE, encoding='utf-8'))['codes'])
+        raise
+
+
+def breadth_confirmed(official: dict, p: date, universe: set = None) -> dict:
+    """폭 정의 v2 — 유니버스 ka10066 ∩ KRX 상장 주권, P일 행은 KRX 확정 종가로 대체 (MDC 파일 미변경)."""
     from market_breadth import ad_line, pct_above_ma200
     panel = pd.read_parquet(os.path.join(DATA, 'breadth_close_panel.parquet'))
-    codes = [c for c in official['codes'] if c in panel.columns]
+    universe = universe if universe is not None else stock_universe()
+    codes = [c for c in official['codes'] if c in panel.columns and c in universe]
     pnl = panel[codes].copy()
     pnl.index = [d.date() for d in pd.DatetimeIndex(pnl.index)]
     pnl = pnl[[d <= p for d in pnl.index]]
@@ -250,8 +278,9 @@ async def collect(now_kst: datetime = None) -> dict:
     d['atr'] = {'pct': float(atr_s.iloc[-1]), 'pctile': pctile_strict(atr_s, float(atr_s.iloc[-1]))}
 
     # 폭 + 외인 시장 (ka10066 확정)
-    off = await ka10066_official(token)
-    d['breadth'] = breadth_confirmed(off, p)
+    univ = stock_universe()
+    off = await ka10066_official(token, univ)
+    d['breadth'] = breadth_confirmed(off, p, univ)
     d['foreign'] = market_foreign_z(off['kospi_frgn_eok'], p)
 
     # 미10Y·원달러
