@@ -125,6 +125,7 @@ def predict(exec_day: date, us_closes: dict, hist: pd.DataFrame, prev_kr_trading
             beta = float(g['x'].cov(g['gap']) / g['x'].var())
         out['by_code'][code] = {
             'cum_by_sym': cum, 'x': x, 'beta': beta, 'n_obs': len(g),
+            'beta_max_date': g['exec'].max() if len(g) else None,
             'exp_gap': (beta * x) if (beta is not None and x is not None) else None}
     return out
 

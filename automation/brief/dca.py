@@ -58,6 +58,21 @@ def cycle_of(d: date, freq: str = None) -> date:
     return prev if scheduled_exec(prev, freq) >= d else cur
 
 
+def pull_status(e: date, trig: bool, state: dict, code: str = '005930') -> str:
+    """'pull'(당김 실행) | 'same_day'(정기일 트리거) | 'passed'(정기일 경과) | 'spent'(이번 주기 당김 소진) | 'none'."""
+    if not trig:
+        return 'none'
+    cyc = cycle_of(e)
+    sched = scheduled_exec(cyc)
+    if e == sched:
+        return 'same_day'
+    if e > sched:
+        return 'passed'
+    if state.get('pulled_cycles', {}).get(code) == str(cyc):
+        return 'spent'
+    return 'pull'
+
+
 def load_state() -> dict:
     if os.path.exists(STATE_PATH):
         with open(STATE_PATH, encoding='utf-8') as f:

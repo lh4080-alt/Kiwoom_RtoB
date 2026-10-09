@@ -246,19 +246,15 @@ def weighted_z(us_closes: dict, weights: dict, closed: list, x_cum: float) -> fl
 
 def dca_line(e: date, trig: bool, z: float, state: dict) -> str:
     """정기 회차 여부 + 삼전 회차 당김 (해당 주기 1회)."""
-    from brief.dca import cycle_of, scheduled_exec
-    cyc = cycle_of(e)
-    sched = scheduled_exec(cyc)
+    from brief.dca import cycle_of, pull_status, scheduled_exec
+    sched = scheduled_exec(cycle_of(e))
     regular = '정기 회차 실행' if e == sched else f'정기 회차 없음 (다음 {sched:%m/%d})'
-    pulled = state.get('pulled_cycles', {}).get('005930') == str(cyc)
-    if not trig:
-        pull = '삼전 당김 미해당'
-    elif e == sched:
-        pull = f'삼전 트리거 해당 · 정기일과 동일 (가중 z {z:+.1f})'
-    elif e > sched or pulled:
-        pull = f'삼전 트리거 해당 · 이번 주기 당김 소진 (가중 z {z:+.1f})'
-    else:
-        pull = f'삼전 회차 당김 해당 (가중 z {z:+.1f})'
+    zt = '' if z is None else f' (가중 z {z:+.1f})'
+    pull = {'none': '삼전 당김 미해당',
+            'same_day': f'삼전 트리거 해당 · 정기일과 동일{zt}',
+            'passed': f'삼전 트리거 해당 · 정기일 경과(당김 없음){zt}',
+            'spent': f'삼전 트리거 해당 · 이번 주기 당김 소진{zt}',
+            'pull': f'삼전 회차 당김 해당{zt}'}[pull_status(e, trig, state)]
     return f'🎯 적립: {regular} · {pull}'
 
 
@@ -327,6 +323,7 @@ async def collect(now_kst: datetime = None) -> dict:
         fl = fl[[x <= p for x in fl.index]]
         d['semi'][code] = {
             'x': v['x'], 'z': z, 'exp_gap': v['exp_gap'], 'beta': v['beta'],
+            'beta_max_date': v.get('beta_max_date'),
             'mae': st.get(code, {}).get('mae'),
             'ma60': float((c.iloc[-1] / c.iloc[-60:].mean() - 1) * 100),
             'ma200': float((c.iloc[-1] / c.iloc[-200:].mean() - 1) * 100),
