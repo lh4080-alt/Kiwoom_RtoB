@@ -270,10 +270,37 @@ def check_macro():
     nv_us10 = _naver_marketindex('bond/US10YT%3DRR')
     nv_fx = _naver_marketindex('exchange/FX_USDKRW')
     # 1차 대조 — 정의가 같은 시장 종가 기준
-    compare('미10Y', tnx, nv_us10, 0.01, '%p',
-            note='^TNX(CBOE) vs 네이버 US10YT=RR(로이터 17:05 ET 종가)')
-    compare('원달러', krw, nv_fx, 0.5, '원',
-            note='KRW=X vs 네이버 FX_USDKRW(하나은행 고시)')
+    # 허용 ±0.02%p (Lee 결정 2026-10-09): 차이 원인 = 마감 시각 정의 차이 (CBOE 15:00 vs
+    # 로이터 17:05 ET). 60일 중 1일 0.017%p — 브리프의 20일 변화(bp) 판단에 영향 없음
+    compare('미10Y', tnx, nv_us10, 0.02, '%p',
+            note='^TNX(CBOE 15:00) vs 네이버 US10YT=RR(로이터 17:05 ET) — 허용 ±0.02%p, 마감시각 정의차이')
+    # 원달러 — 운영 원천을 ECOS 731Y003/0000003 '원/달러(종가 15:30)'로 확정 (Lee 결정 2026-10-09)
+    import os as _os
+    from datetime import timedelta as _td
+    key = _os.environ.get('ECOS_KEY')
+    if key:
+        start = (datetime.now() - _td(days=150)).strftime('%Y%m%d')
+        js = requests.get(f'https://ecos.bok.or.kr/api/StatisticSearch/{key}/json/kr/1/200/'
+                          f'731Y003/D/{start}/{datetime.now():%Y%m%d}/0000003', timeout=60).json()
+        ecos = pd.Series({pd.Timestamp(r['TIME']): float(r['DATA_VALUE'])
+                          for r in js['StatisticSearch']['row']}).sort_index()
+        from modules.semi_trigger.kr_calendar import is_kr_trading_day
+        tail = ecos.iloc[-N:]
+        miss = [d for d in pd.bdate_range(tail.index.min(), tail.index.max())
+                if is_kr_trading_day(d.date()) and d not in tail.index]
+        SUMMARY.append({'item': '원달러 (ECOS 15:30 종가, 기준 원천)', 'n': int(len(tail)),
+                        'n_fail': len(miss), 'max_err': None, 'tol': 0, 'unit': '일',
+                        'pass': not miss, 'causes': {'결측 거래일': [str(d.date()) for d in miss][:5]},
+                        'note': '정의 기준 원천을 직접 사용 (한국은행) — 거래일 결측 여부만 검사',
+                        'range': f'{tail.index.min().date()}~{tail.index.max().date()}'})
+        compare('원달러 (참고 하나은행 고시)', ecos, nv_fx, 0.5, '원',
+                note='참고 — 하나은행 고시 시각 상이',
+                special_days={d: '정의차이(고시시각)' for d in ecos.index})
+        compare('원달러 (참고 yfinance)', ecos, krw, 0.5, '원',
+                note='참고 — KRW=X 현지 종가 기준시각 상이',
+                special_days={d: '정의차이(기준시각)' for d in ecos.index})
+    else:
+        compare('원달러', krw, nv_fx, 0.5, '원', note='ECOS_KEY 없음 — KRW=X vs 하나은행 고시')
     # 참고 대조 — 공식 고시 (정의 차이 있음)
     dgs = fdr.DataReader('FRED:DGS10', '2026-04-01')['DGS10']
     dex = fdr.DataReader('FRED:DEXKOUS', '2026-04-01')['DEXKOUS']
