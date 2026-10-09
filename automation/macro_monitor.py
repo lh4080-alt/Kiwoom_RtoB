@@ -468,8 +468,10 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
     # 1-1) 코스피 지수 — ka20006 OHLC (kospi parquet 단일 소유자, 매일 갱신)
     try:
         ohlc_k = await fetch_kospi_ohlc_full(token)
+        # dt는 인덱스 — ohlc_k['dt'] KeyError로 폴백만 타며 parquet이 10/7 장중값에
+        # 멈춰 있던 버그 (2026-10-09 V1 외부 대조로 발견)
         kospi_closes = {d.strftime('%Y-%m-%d'): float(v)
-                        for d, v in zip(ohlc_k['dt'], ohlc_k['close'])}
+                        for d, v in zip(ohlc_k.index, ohlc_k['close'])}
         ohlc_k.to_parquet(KOSPI_OHLC_PATH)
     except Exception:
         logger.exception('[macro] ka20006 OHLC 실패 — closes 단독 폴백')

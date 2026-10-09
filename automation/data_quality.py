@@ -106,7 +106,10 @@ def run_checks(cross_alerts: list = None) -> dict:
     # 신선도 검사 (2026-10-07 breadth 3주 동결 사고) — 산출물 최신 날짜 = 직전 거래일
     try:
         ohlc = pd.read_parquet(os.path.join(DATA, 'kospi_daily_ohlc.parquet'))
-        prev_trade = ohlc.index[ohlc.index < pd.Timestamp(pd.Timestamp.now().date())].max()
+        # 직전 거래일은 kr_calendar로 — parquet 자신으로 계산하면 parquet이 멈춰도 통과하는
+        # 순환 검사가 됨 (2026-10-09 V1: parquet 10/7 장중값 정체를 놓친 원인)
+        from modules.semi_trigger.kr_calendar import prev_kr_trading_day
+        prev_trade = pd.Timestamp(prev_kr_trading_day(pd.Timestamp.now().date()))
         for label, fpath in (('breadth 패널', os.path.join(DATA, 'breadth_close_panel.parquet')),
                              ('kospi parquet', os.path.join(DATA, 'kospi_daily_ohlc.parquet'))):
             if os.path.exists(fpath):
@@ -127,8 +130,8 @@ def run_checks(cross_alerts: list = None) -> dict:
     if last_k:
         last_kd = pd.Timestamp(last_k)
         try:
-            ohlc2 = pd.read_parquet(os.path.join(DATA, 'kospi_daily_ohlc.parquet'))
-            prev_trade2 = ohlc2.index[ohlc2.index < pd.Timestamp(pd.Timestamp.now().date())].max()
+            from modules.semi_trigger.kr_calendar import prev_kr_trading_day
+            prev_trade2 = pd.Timestamp(prev_kr_trading_day(pd.Timestamp.now().date()))
             if last_kd < prev_trade2:
                 alerts.append(f'국면 창 지연: kospi 계산 마지막 봉 {last_k} < 직전 거래일 '
                               f'{prev_trade2.date()} — 당일 봉 결측, 익일 소급 대기')
