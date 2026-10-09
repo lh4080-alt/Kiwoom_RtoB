@@ -6,7 +6,6 @@
 
 실행: beelink에서 python tools/us_weight_calc.py
 """
-import asyncio
 import json
 import os
 import sys
@@ -49,7 +48,7 @@ def main() -> int:
     from modules.semi_trigger.kr_calendar import next_kr_trading_day
 
     us_close = load_us_close()
-    kr_close = asyncio.get_event_loop().run_until_complete(load_kr_close())
+    kr_close = load_kr_close()
     us_ret = us_close.pct_change() * 100
     kr_ret = kr_close.pct_change() * 100
 
