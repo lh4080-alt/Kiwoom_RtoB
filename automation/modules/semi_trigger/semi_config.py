@@ -19,9 +19,10 @@ US_MEM_COMPOSITION = {
 HDD_INCLUDE_IN_SIGNAL = False
 # 종목별 기본 가중치 (가중치 산출 스크립트 결과로 갱신 — tools/us_weight_calc.py)
 STOCK_US_WEIGHTS = {
-    '000660': {'MU': 0.7, 'SNDK': 0.3},   # SK하이닉스
-    '005930': {'MU': 0.5, 'SNDK': 0.5},   # 삼성전자
+    '000660': {'MU': 0.73, 'SNDK': 0.27},  # v3 다변량 재산출 (2026-10-09, us_weight_v2.json)
+    '005930': {'MU': 0.59, 'SNDK': 0.41},  # v3 다변량 재산출 (2026-10-09)
 }
+US_WEIGHT_MODE = 'fixed'   # 'fixed' | 'rolling_beta' (60일 롤링 β 기반 가중 — v3 옵션)
 LEGACY_MODE = 'min'    # 판정용 반도체 신호 = min(us_mem_z, legacy_z) | 'mean'
 
 # ── 작업 5: 수급 역행 경고 ───────────────────────────────────
