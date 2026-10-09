@@ -25,6 +25,11 @@ STOCK_US_WEIGHTS = {
 US_WEIGHT_MODE = 'fixed'   # 'fixed' | 'rolling_beta' (60일 롤링 β 기반 가중 — v3 옵션)
 LEGACY_MODE = 'min'    # 판정용 반도체 신호 = min(us_mem_z, legacy_z) | 'mean'
 
+# 하닉 트리거 모드 (2026-10-09 Lee 지시 — FDR 통과 확인 후 전환)
+# 'us_drop': 기존 MU 하락 트리거 | 'residual_gap': MU로 설명 안 되는 과대 갭
+# (잔차 <= -1.5σ, 판정은 한국 시가 확정 후 09:01 → 09:05 알림)
+HYNIX_TRIGGER_MODE = 'us_drop'
+
 # ── 작업 5: 수급 역행 경고 ───────────────────────────────────
 SUPPLY_WARN = {
     'program_z': -0.5,       # 프로그램 순매수 z <= 이 값
