@@ -707,7 +707,14 @@ def format_report(record: dict) -> str:
         lines.append(f"   ③수급 {axes['axis3']}{cum20_s}  ④폭·주도 {axes['axis4']} · 200일선 위 {b.get('pct_above_ma200', 0):.0f}%")
         if record.get('axes_signal') == 1:
             lines.append('   🔄 §7 신호(참고): 과거 16건·에피소드 16개 — 미확정')
-        lines.append(f"   국면 {reg['label']} 지속 {len([1 for r in history if (r.get('regime') or {}).get('label') == reg.get('label')])}거래일째")
+        # 연속 일수 — 같은 라벨 전체 행 수를 세던 버그 수정 (2026-10-09, 46일→실제 32일)
+        _dur = 0
+        for _r in reversed(history):
+            if (_r.get('regime') or {}).get('label') == reg.get('label'):
+                _dur += 1
+            else:
+                break
+        lines.append(f"   국면 {reg['label']} 지속 {_dur}거래일째")
 
     if reg and not (FOUR_AXIS_DISPLAY and axes.get('axis2') not in (None, '데이터부족')):
         mom_s = 'N/A' if reg.get('mom') is None else f"{reg['mom']:+.1f}%"
