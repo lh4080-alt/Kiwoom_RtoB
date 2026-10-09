@@ -42,9 +42,12 @@ def load_ohlc_with_open(code: str) -> pd.DataFrame:
 def load_us_returns() -> pd.DataFrame:
     import yfinance as yf
     cols = {}
-    for s in ('MU', 'SNDK', 'SOX'):
+    for s in ('MU', 'SNDK'):
         h = yf.Ticker(s).history(period='max', interval='1d', auto_adjust=True)['Close']
-        h.index = h.index.tz_localize(None).normalize()
+        if h is None or h.empty:
+            continue
+        idx = h.index.tz_localize(None) if getattr(h.index, 'tz', None) else h.index
+        h.index = idx.normalize()
         cols[s] = h.pct_change() * 100
     return pd.DataFrame(cols).dropna(how='all')
 
