@@ -250,19 +250,38 @@ def check_us():
 
 
 # ── 6) 미10Y·원달러 ─────────────────────────────────────────
+def _naver_marketindex(path: str, n_pages: int = 3) -> pd.Series:
+    """네이버 시장지표 일별 종가 (환율: 하나은행 고시 / 미국채: 로이터 17:05 ET 종가)."""
+    out = {}
+    for page in range(1, n_pages + 1):
+        js = requests.get(f'https://api.stock.naver.com/marketindex/{path}/prices'
+                          f'?page={page}&pageSize=30', headers=H, timeout=30).json()
+        for x in js:
+            out[pd.Timestamp(str(x['localTradedAt'])[:10])] = _num(x['closePrice'])
+    return pd.Series(out).sort_index()
+
+
 def check_macro():
     import yfinance as yf
     import FinanceDataReader as fdr
     tnx = yf.Ticker('^TNX').history(period='6mo', interval='1d')['Close']
     krw = yf.Ticker('KRW=X').history(period='6mo', interval='1d')['Close']
+    tnx.index, krw.index = _norm(tnx.index), _norm(krw.index)
+    nv_us10 = _naver_marketindex('bond/US10YT%3DRR')
+    nv_fx = _naver_marketindex('exchange/FX_USDKRW')
+    # 1차 대조 — 정의가 같은 시장 종가 기준
+    compare('미10Y', tnx, nv_us10, 0.01, '%p',
+            note='^TNX(CBOE) vs 네이버 US10YT=RR(로이터 17:05 ET 종가)')
+    compare('원달러', krw, nv_fx, 0.5, '원',
+            note='KRW=X vs 네이버 FX_USDKRW(하나은행 고시)')
+    # 참고 대조 — 공식 고시 (정의 차이 있음)
     dgs = fdr.DataReader('FRED:DGS10', '2026-04-01')['DGS10']
     dex = fdr.DataReader('FRED:DEXKOUS', '2026-04-01')['DEXKOUS']
-    tnx.index, krw.index = _norm(tnx.index), _norm(krw.index)
-    compare('미10Y', tnx, dgs, 0.01, '%p',
-            note='^TNX(CBOE 종가) vs DGS10(재무부 고시) — 정의차이·FRED 발표 시차 수일',
+    compare('미10Y (참고 FRED)', tnx, dgs, 0.01, '%p',
+            note='참고 — DGS10 재무부 고시, 정의차이·발표 시차',
             special_days={d: '정의차이(고시기준)' for d in tnx.index})
-    compare('원달러', krw, dex, 0.5, '원',
-            note='KRW=X(현지 종가) vs DEXKOUS(뉴욕 정오 매입률) — 기준시각 차이',
+    compare('원달러 (참고 FRED)', krw, dex, 0.5, '원',
+            note='참고 — DEXKOUS 뉴욕 정오 매입률, 기준시각 차이',
             special_days={d: '정의차이(기준시각)' for d in krw.index})
 
 
