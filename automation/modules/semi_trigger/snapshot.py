@@ -32,16 +32,16 @@ TREND_MA_DAYS = 60
 
 
 async def fetch_trend_info(token: str, eval_date: str) -> dict:
-	"""종목별 60일선 대비 위치 — 눌림 매수 후보의 추세 필터.
+	"""종목별 60일선 대비 위치 + 괴리율 — 작업 6 완충 구간 판정용.
 
-	Returns: {code: {'close': 원, 'ma60': 원, 'uptrend': bool|None}}
+	Returns: {code: {'close': 원, 'ma60': 원, 'uptrend': bool|None, 'disp': %|None}}
 	"""
 	from .etf_mapping import TARGET_UNDERLYINGS
 	from api.daily_candle import fn_ka10081
 	base_dt = eval_date.replace('-', '')
 	info = {}
 	for code in TARGET_UNDERLYINGS:
-		result = {'close': None, 'ma60': None, 'uptrend': None}
+		result = {'close': None, 'ma60': None, 'uptrend': None, 'disp': None}
 		try:
 			resp = await fn_ka10081(code, base_dt=base_dt, token=token, silent=True)
 			candles = []
@@ -52,13 +52,37 @@ async def fetch_trend_info(token: str, eval_date: str) -> dict:
 			closes = [c['close'] for c in candles[:TREND_MA_DAYS]]
 			if len(closes) >= TREND_MA_DAYS:
 				ma = sum(closes) / len(closes)
-				result = {'close': closes[0], 'ma60': ma, 'uptrend': closes[0] > ma}
+				disp = (closes[0] - ma) / ma * 100
+				result = {'close': closes[0], 'ma60': ma, 'uptrend': closes[0] > ma,
+				          'disp': round(disp, 1)}
 			elif closes:
 				result['close'] = closes[0]
 		except Exception:
 			logger.exception(f"[snapshot] trend info 실패 {code}")
 		info[code] = result
 	return info
+
+
+async def refresh_stock_factors(token: str, eval_date: str,
+                                db_path: Optional[str] = None) -> dict:
+	"""4신호 재수집 — 16:00 수집분이 KRX 확정 전 임시 집계일 수 있어 (10/8 사례:
+	5.194조 기록 → 확정 5.617조), 05:30 알림 전에 확정치로 갱신 (지시서 작업 0).
+
+	Returns: {code: fresh_factors}
+	"""
+	from .etf_mapping import TARGET_UNDERLYINGS
+	from .collectors.stock_factors import collect_stock_factors
+	from . import db as st_db
+	base_dt = eval_date.replace('-', '')
+	out = {}
+	for code in TARGET_UNDERLYINGS:
+		try:
+			fresh = await collect_stock_factors(code, base_dt, token)
+			st_db.upsert_factors(eval_date, code, fresh, db_path=db_path)
+			out[code] = fresh
+		except Exception:
+			logger.exception(f"[snapshot] 4신호 재수집 실패 {code} — stale 유지")
+	return out
 
 
 def calc_z_history(db_col: str, dates_desc: list, raw_history: list,
@@ -125,8 +149,31 @@ def fmt_pct(v):
 	return 'N/A' if v is None else f"{v:+.3f}%"
 
 
+def fmt_pct1(v):
+	return 'N/A' if v is None else f"{v:+.1f}%"
+
+
 def fmt_won(v):
-	return 'N/A' if v is None else f"{v:>+,.0f}원"
+	"""조/억 단위 표기 (작업 7) — 부호 포함 (순매수 등)."""
+	if v is None:
+		return 'N/A'
+	sign = '-' if v < 0 else ''
+	a = abs(v)
+	if a >= 1e12:
+		return f"{sign}{a / 1e12:.2f}조"
+	if a >= 1e8:
+		return f"{sign}{a / 1e8:,.0f}억"
+	return f"{sign}{a / 1e4:,.0f}만"
+
+
+def fmt_amt(v):
+	"""거래대금용 — 부호 없음 (작업 7)."""
+	if v is None:
+		return 'N/A'
+	a = abs(v)
+	if a >= 1e12:
+		return f"{a / 1e12:.2f}조"
+	return f"{a / 1e8:,.0f}억"
 
 
 def format_snapshot_message(output: dict, label: str,
@@ -297,7 +344,12 @@ async def take_snapshot(token: Optional[str] = None, eval_date: str = '',
 		from telegram.tel_send import tel_send
 		msg = format_snapshot_message(output, label, z_histories=z_histories)
 		try:
-			await tel_send(msg, parse_mode='HTML')
+			# 병행 운영 — 문구 기록 + 발송 스위치 (brief_config.LEGACY_SEMI_SEND, 기본 True)
+			from brief.legacy_log import log_legacy
+			import brief_config as _bcfg
+			log_legacy('semi', eval_date, msg)
+			if _bcfg.LEGACY_SEMI_SEND:
+				await tel_send(msg, parse_mode='HTML')
 		except Exception:
 			logger.exception("[snapshot] 텔레그램 전송 실패")
 	return output

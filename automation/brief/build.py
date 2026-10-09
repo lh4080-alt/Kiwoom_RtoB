@@ -262,6 +262,22 @@ def dca_line(e: date, trig: bool, z: float, state: dict) -> str:
     return f'🎯 적립: {regular} · {pull}'
 
 
+def ecos_usdkrw(p: date):
+    """한국은행 ECOS 원/달러 (서울 외환시장 15:30 종가). 키 없음·응답 없음이면 None."""
+    key = os.environ.get('ECOS_KEY')
+    if not key:
+        return None
+    import requests
+    start = (p - timedelta(days=60)).strftime('%Y%m%d')
+    url = (f'https://ecos.bok.or.kr/api/StatisticSearch/{key}/json/kr/1/100/'
+           f'{cfg.ECOS_USDKRW_STAT}/D/{start}/{p:%Y%m%d}/{cfg.ECOS_USDKRW_ITEM}')
+    try:
+        rows = requests.get(url, timeout=30).json()['StatisticSearch']['row']
+        return pd.Series({pd.Timestamp(r['TIME']): float(r['DATA_VALUE']) for r in rows}).sort_index()
+    except Exception:
+        return None
+
+
 async def collect(now_kst: datetime = None) -> dict:
     from modules.semi_trigger.token_provider import get_semi_token
     from macro_monitor import compute_regime, load_history
@@ -307,12 +323,17 @@ async def collect(now_kst: datetime = None) -> dict:
 
     # 미10Y·원달러
     tnx = yf.Ticker('^TNX').history(period='3mo', interval='1d')['Close']
-    krw = yf.Ticker('KRW=X').history(period='3mo', interval='1d')['Close']
-    for name, s in (('us10y', tnx), ('usdkrw', krw)):
-        s.index = [x.date() for x in pd.DatetimeIndex(s.index).tz_localize(None)]
-        s = s[[x <= sf['d_last'] for x in s.index]]
+    krw, krw_src = ecos_usdkrw(p), 'ecos'
+    if krw is None:
+        krw, krw_src = yf.Ticker('KRW=X').history(period='3mo', interval='1d')['Close'], 'yfinance'
+    for name, s, cut, src in (('us10y', tnx, sf['d_last'], 'yfinance'),
+                              ('usdkrw', krw, p if krw_src == 'ecos' else sf['d_last'], krw_src)):
+        idx = pd.DatetimeIndex(s.index)
+        s.index = [x.date() for x in (idx.tz_localize(None) if idx.tz is not None else idx)]
+        s = s[[x <= cut for x in s.index]]
         d[name] = {'last': float(s.iloc[-1]), 'chg20': float(s.iloc[-1] - s.iloc[-21]),
-                   'chg20_pct': float((s.iloc[-1] / s.iloc[-21] - 1) * 100), 'date': s.index[-1]}
+                   'chg20_pct': float((s.iloc[-1] / s.iloc[-21] - 1) * 100), 'date': s.index[-1],
+                   'source': src}
 
     # 반도체 블록
     us = load_us_closes()
@@ -368,7 +389,8 @@ def render(d: dict, state: dict = None, failures: list = None) -> str:
                  f"(20일 변화 {b['ad_chg20']:+,.0f})")
     u, x = d['us10y'], d['usdkrw']
     lines.append(f"미10Y {u['last']:.2f}% (20일 {u['chg20'] * 100:+.0f}bp) · "
-                 f"원달러 {x['last']:,.0f} (20일 {x['chg20_pct']:+.1f}%) ⚠️ 미검증")
+                 f"원달러 {x['last']:,.0f} (20일 {x['chg20_pct']:+.1f}%)"
+                 + ('' if x.get('source') == 'ecos' else ' ⚠️ 미검증'))
     hv = ', 고변동' if d['atr']['pctile'] >= 80 else ''
     lines.append(f"변동성 ATR14 {d['atr']['pct']:.1f}% ({d['atr']['pctile']:.0f}%ile{hv})")
     zf = lambda z: 'N/A' if z is None else f'{z:+.1f}'  # noqa: E731

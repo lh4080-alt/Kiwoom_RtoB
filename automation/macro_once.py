@@ -38,7 +38,13 @@ async def run_daily(send_telegram: bool = True) -> int:
         return 1
     if send_telegram:
         from telegram.tel_send import tel_send
-        await tel_send(format_report(record))
+        text = format_report(record)
+        # 병행 운영 — 문구 기록 + 발송 스위치 (brief_config.LEGACY_MACRO_SEND, 기본 True)
+        from brief.legacy_log import log_legacy
+        import brief_config as _bcfg
+        log_legacy('macro', record['date'], text)
+        if _bcfg.LEGACY_MACRO_SEND:
+            await tel_send(text)
         # 대시보드 HTML 문서 첨부
         try:
             import httpx

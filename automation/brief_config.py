@@ -81,5 +81,11 @@ RANGE_LIMITS = {
 }
 STALE_WARN_DAYS = 3          # 결측 시 직전값 사용 — 이 일수 이상이면 별도 경고
 
+# ── 원달러 기준 (Lee 확정 2026-10-09: 서울 외환시장 15:30 종가) ─────────────
+# ECOS_KEY 환경변수가 있으면 한국은행 ECOS 사용 → '⚠️ 미검증' 해제. 통계표·항목 코드는 키 발급 후
+# 첫 실행에서 응답으로 확인 (ECOS StatisticItemList) — 응답이 비면 yfinance + 미검증으로 폴백
+ECOS_USDKRW_STAT = '731Y003'
+ECOS_USDKRW_ITEM = '0000003'
+
 # ── 표기 ─────────────────────────────────────────────────────
 HEADER_FMT = '[semi_trigger] US {us_date} 세션 → KR 실행 {kr_date} (발송 {sent_at})'
