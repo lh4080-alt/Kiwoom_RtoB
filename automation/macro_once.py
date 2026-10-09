@@ -45,22 +45,23 @@ async def run_daily(send_telegram: bool = True) -> int:
         log_legacy('macro', record['date'], text)
         if _bcfg.LEGACY_MACRO_SEND:
             await tel_send(text)
-        # 대시보드 HTML 문서 첨부
-        try:
-            import httpx
-            dash_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                     'tools', 'macro_dashboard.html')
-            if os.path.exists(dash_path):
-                tok = open(r'C:\market_data_collector\config\telegram_token.txt', encoding='utf-8-sig').read().strip()
-                chat = open(r'C:\market_data_collector\config\telegram_chat_id.txt', encoding='utf-8-sig').read().strip()
-                async with httpx.AsyncClient(timeout=30) as hc:
-                    with open(dash_path, 'rb') as f:
-                        r = await hc.post(
-                            f'https://api.telegram.org/bot{tok}/sendDocument',
-                            data={'chat_id': chat},
-                            files={'document': ('macro_dashboard.html', f, 'text/html')})
-        except Exception:
-            pass  # 대시보드 첨부 실패해도 리포트는 이미 발송됨
+        # 대시보드 HTML 문서 첨부 — 기존 알림 스위치와 함께 제어
+        if _bcfg.LEGACY_MACRO_SEND:
+            try:
+                import httpx
+                dash_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                         'tools', 'macro_dashboard.html')
+                if os.path.exists(dash_path):
+                    tok = open(r'C:\market_data_collector\config\telegram_token.txt', encoding='utf-8-sig').read().strip()
+                    chat = open(r'C:\market_data_collector\config\telegram_chat_id.txt', encoding='utf-8-sig').read().strip()
+                    async with httpx.AsyncClient(timeout=30) as hc:
+                        with open(dash_path, 'rb') as f:
+                            r = await hc.post(
+                                f'https://api.telegram.org/bot{tok}/sendDocument',
+                                data={'chat_id': chat},
+                                files={'document': ('macro_dashboard.html', f, 'text/html')})
+            except Exception:
+                pass  # 대시보드 첨부 실패해도 리포트는 이미 발송됨
     print(f"[macro_once] daily 완료 {datetime.now().isoformat(timespec='seconds')} "
           f"missing={missing or 'none'}")
     # 종목별 수급 증분 — 어제분 ka10059 확정치 (4축 ③ 괴리 근거, ka10059는 §4-1 검증 소스)

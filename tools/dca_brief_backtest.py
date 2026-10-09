@@ -11,7 +11,9 @@
   검정    순열 10,000회 — 당김이 발생한 주기마다 '같은 주기 정기일 이전 거래일' 중 하나를 무작위
           선택해 평균단가 분포 생성 → 실제 당김 평균단가 이하 비율 = p (단측, 낮을수록 개선)
   국면    직전 KR 거래일 KOSPI로 compute_regime (point-in-time). 사전 선언 2안:
-          역추세 {강세장 0.75, 보합·전환기 1.0, 하락장 1.25} / 추세추종 {1.25, 1.0, 0.75}
+          역추세 {강세장 0.75, 보합·전환기 1.0, 하락장 1.25} (추세추종안은 악화로 폐기 2026-10-09)
+  국면검정 원형 이동 순열 — 국면 라벨 열을 매수일 열에 대해 k칸(1..N−1) 원형 이동해 배정, 국면의
+          지속성(자기상관)은 보존하고 가격과의 정렬만 깨뜨림 → 평균단가 비율 분포에서 p (단측)
           지표: 평균단가, 최종 평가액/투입액, 최저 평가손익률(= min(평가액/누적투입 − 1))
 데이터: KR pykrx 수정주가(V1 ka10081 대조 0원 — 원천이 2014-07-16부터라 기간 한계), 미국 yfinance(V1 Nasdaq 대조), KOSPI ka20006 parquet.
 """
@@ -32,8 +34,7 @@ from brief.dca import cycle_of, scheduled_exec  # noqa: E402
 
 START = '20120101'
 N_PERM = 10_000
-REGIME_PLANS = {'역추세': {'강세장': 0.75, '보합·전환기': 1.0, '하락장': 1.25},
-                '추세추종': {'강세장': 1.25, '보합·전환기': 1.0, '하락장': 0.75}}
+REGIME_PLANS = {'역추세': {'강세장': 0.75, '보합·전환기': 1.0, '하락장': 1.25}}  # 추세추종 폐기
 
 
 def load():
@@ -181,8 +182,24 @@ def main() -> int:
                 invested += a
                 worst = min(worst, units * px.loc[s, 'close'] / invested - 1)
             final = units * px['close'].iloc[-1] / invested
-            print(f'  {plan:<6} 평균단가 {invested / units:,.0f} | 최종 배수 {final:.3f} | '
-                  f'최저 평가손익률 {worst * 100:+.1f}%')
+            line = (f'  {plan:<6} 평균단가 {invested / units:,.0f} | 최종 배수 {final:.3f} | '
+                    f'최저 평가손익률 {worst * 100:+.1f}%')
+            if mult is not None:
+                labels = [reg_by_day[s_] for s_ in buys]
+                opens = np.array([px.loc[s_, 'open'] for s_ in buys])
+                base_ap = len(buys) / np.sum((1 - cfg.COST_BUY) / opens)
+
+                def ap_of(lbls):
+                    a = np.array([mult.get(l_, 1.0) for l_ in lbls])
+                    a = a * len(a) / a.sum()
+                    return a.sum() / np.sum(a * (1 - cfg.COST_BUY) / opens)
+                actual = ap_of(labels) / base_ap
+                null = np.array([ap_of(labels[k:] + labels[:k]) / base_ap
+                                 for k in range(1, len(labels))])
+                pv = (np.sum(null <= actual) + 1) / (len(null) + 1)
+                line += (f' | 단가비 {actual:.4f} vs 원형이동 null 중앙 {np.median(null):.4f} '
+                         f'[{np.percentile(null, 2.5):.4f}~{np.percentile(null, 97.5):.4f}] p={pv:.4f}')
+            print(line)
     print('\n결과 보고만 — 적용 여부는 Lee 결정 (DCA_REGIME_SCALING 기본 OFF 유지)')
     return 0
 

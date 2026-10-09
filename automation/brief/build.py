@@ -208,10 +208,14 @@ def breadth_confirmed(official: dict, p: date, universe: set = None) -> dict:
     """official=None이면 대체 없이 패널 그대로 (재생 시 P 행은 이미 MDC 확정값)."""
     f = breadth_frame(p, official, universe)
     last = f.iloc[-1]
+    # A/D 20일 비율 = 20일 상승 종목 합 ÷ 하락 종목 합 (누적 절대값은 기준일 의존이라 표시 제외)
+    ratio = f['up'].rolling(20).sum() / f['dn'].rolling(20).sum().replace(0, np.nan)
+    r_last = float(ratio.iloc[-1])
     return {'pct_above200': float(last['pct_above200']), 'ad_cum': float(last['ad_cum']),
             'ad_chg20': float(last['ad_cum'] - f['ad_cum'].iloc[-21]),
             'up': int(last['up']), 'dn': int(last['dn']), 'universe': int(last['universe']),
-            'date': f.index[-1]}
+            'ad_ratio20': r_last, 'ad_ratio20_pctile': pctile_strict(ratio, r_last),
+            'ad_ratio_n': int(ratio.notna().sum()), 'date': f.index[-1]}
 
 
 def market_foreign_z(official_frgn_eok: float, p: date) -> dict:
@@ -254,6 +258,8 @@ def dca_line(e: date, trig: bool, z: float, state: dict) -> str:
     sched = scheduled_exec(cycle_of(e))
     regular = '정기 회차 실행' if e == sched else f'정기 회차 없음 (다음 {sched:%m/%d})'
     zt = '' if z is None else f' (가중 z {z:+.1f})'
+    if not cfg.DCA_PULL_FORWARD:
+        return f'🎯 적립: {regular}'
     pull = {'none': '삼전 당김 미해당',
             'same_day': f'삼전 트리거 해당 · 정기일과 동일{zt}',
             'passed': f'삼전 트리거 해당 · 정기일 경과(당김 없음){zt}',
@@ -385,8 +391,8 @@ def render(d: dict, state: dict = None, failures: list = None) -> str:
     fz = lambda z: 'N/A' if z is None else f'{z:+.1f}'  # noqa: E731
     lines.append(f"외인 z20 {fz(zs[0])} / z60 {fz(zs[1])}{ext} · 외국인(기타외국인 제외)"
                  + (lag_tag(f.get('last_date'), p) if f.get('n') else ' (결측)'))
-    lines.append(f"폭 200일선 위 {b['pct_above200']:.0f}% · A/D 누적 {b['ad_cum']:+,.0f} "
-                 f"(20일 변화 {b['ad_chg20']:+,.0f})")
+    lines.append(f"폭 200일선 위 {b['pct_above200']:.0f}% · A/D 20일 비율 {b['ad_ratio20']:.2f} "
+                 f"({b['ad_ratio20_pctile']:.0f}%ile)")
     u, x = d['us10y'], d['usdkrw']
     lines.append(f"미10Y {u['last']:.2f}% (20일 {u['chg20'] * 100:+.0f}bp) · "
                  f"원달러 {x['last']:,.0f} (20일 {x['chg20_pct']:+.1f}%)"

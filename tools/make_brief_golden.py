@@ -90,6 +90,16 @@ def verify(d: dict) -> list:
         valid = (~np.isnan(last)) & (cnt == 200)
         add('200일선 위 비율(%)', d['breadth']['pct_above200'],
             float(np.sum(last[valid] > ma[valid]) / valid.sum() * 100), 0.01)
+        # A/D 20일 비율 — 같은 원천, numpy 부호 집계로 재구현 (기준점 이후 행만)
+        o = pd.Timestamp(cfg.AD_ORIGIN).date()
+        dates_ = [x for x in pd.DatetimeIndex(panel.index).date if o <= x <= p]
+        sub = panel[cols].copy()
+        sub.index = list(pd.DatetimeIndex(sub.index).date)
+        a2 = sub.loc[dates_].values
+        dif = a2[1:] / a2[:-1] - 1
+        up_n = np.sum(dif > 0, axis=1)[-20:].sum()
+        dn_n = np.sum(dif < 0, axis=1)[-20:].sum()
+        add('A/D 20일 비율', d['breadth']['ad_ratio20'], float(up_n / dn_n), 1e-6)
     return rows
 
 

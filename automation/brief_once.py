@@ -54,7 +54,9 @@ async def main() -> int:
            'sent': bool(cfg.BRIEF_SEND),
            'metrics': {
                'regime': d['regime']['label'], 'dd': d['regime']['dd'], 'mom': d['regime']['mom'],
-               'pct_above200': d['breadth']['pct_above200'], 'ad_cum': d['breadth']['ad_cum'],
+               'pct_above200': d['breadth']['pct_above200'],
+               'ad_ratio20': d['breadth']['ad_ratio20'],
+               'ad_ratio20_pctile': d['breadth']['ad_ratio20_pctile'],
                'atr_pct': d['atr']['pct'], 'atr_pctile': d['atr']['pctile'],
                'us10y': d['us10y']['last'], 'usdkrw': d['usdkrw']['last'],
                'foreign_z20': d['foreign'].get('z20'), 'foreign_z60': d['foreign'].get('z60'),

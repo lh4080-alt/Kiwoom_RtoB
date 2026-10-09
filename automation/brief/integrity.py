@@ -48,6 +48,8 @@ def run_checks(d: dict) -> list:
         fails.append(f'범위: 원달러 {d["usdkrw"]["last"]}')
 
     # ── 단위 (자릿수) ──
+    if not (0 < d['breadth'].get('ad_ratio20', 1) < 10):
+        fails.append(f"단위: A/D 20일 비율 {d['breadth'].get('ad_ratio20')}")
     if not (0 <= d['breadth']['pct_above200'] <= 100):
         fails.append('단위: 200일선 위 비율')
     if not (0 < d['atr']['pct'] < 20):
