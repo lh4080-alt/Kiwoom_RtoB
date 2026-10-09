@@ -28,7 +28,13 @@ def main() -> int:
     targets = forward_returns(ohlc['close'].astype(float))
     panel = pd.read_parquet(FULL_PANEL_PATH)
     univ = stock_universe()
-    clean = panel[[c for c in panel.columns if c in univ]]
+    if '--k81' in sys.argv:
+        # 장기 패널 (ka10081 수정주가, 2014-07~) — 기존 열은 동일 기간 MDC 혼입 패널이 없어 v2만 비교
+        k81 = pd.read_parquet(os.path.join(ROOT, 'config', 'data', 'breadth_k81_panel.parquet'))
+        clean = k81[[c for c in k81.columns if c in univ]]
+        panel = clean
+    else:
+        clean = panel[[c for c in panel.columns if c in univ]]
     print(f'패널 {panel.shape[1]}열 → 상장 주권 {clean.shape[1]}열 '
           f'({panel.index.min().date()}~{panel.index.max().date()})\n')
     old = breadth_indicators(panel, ad_line, pct_above_ma200)
@@ -49,7 +55,8 @@ def main() -> int:
             rows.append({'indicator': name, 'target': k, 'ic_old': a['ic'], 't_old': a['t'],
                          'grade_old': mark(a), 'ic_v2': b['ic'], 't_v2': b['t'], 'grade_v2': mark(b),
                          'h1_v2': b['ic_h1'], 'h2_v2': b['ic_h2']})
-    out = os.path.join(ROOT, 'config', 'data', 'verify', 'ic_breadth_v2.csv')
+    out = os.path.join(ROOT, 'config', 'data', 'verify',
+                       'ic_breadth_k81.csv' if '--k81' in sys.argv else 'ic_breadth_v2.csv')
     pd.DataFrame(rows).to_csv(out, index=False, encoding='utf-8-sig')
     print(f'\n저장: {out} | 판정 규칙: 후보 |IC|≥0.05·|t|≥2·전반/후반 부호 일치, 유의 |t|≥3.2')
     return 0
