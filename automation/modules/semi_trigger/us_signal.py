@@ -61,7 +61,6 @@ def latest_signal(stock_weights: dict = None, sigma_window: int = None) -> dict:
     Returns: {'mu_z', 'sndk_z', 'hdd_z', 'hdd_ret', 'mu_ret', 'sndk_ret',
               'comp_z_by_stock': {code: z}, 'us_date'}
     """
-    import semi_config as cfg
     from modules.semi_trigger.semi_config import (STOCK_US_WEIGHTS, SIGMA_WINDOW,
                                                   HDD_INCLUDE_IN_SIGNAL,
                                                   US_MEM_COMPOSITION)
