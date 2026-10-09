@@ -171,28 +171,46 @@ def stock_universe() -> set:
         raise
 
 
-def breadth_confirmed(official: dict, p: date, universe: set = None) -> dict:
-    """폭 정의 v2 — 유니버스 ka10066 ∩ KRX 상장 주권, P일 행은 KRX 확정 종가로 대체 (MDC 파일 미변경)."""
-    from market_breadth import ad_line, pct_above_ma200
+def breadth_frame(p: date, official: dict = None, universe: set = None) -> pd.DataFrame:
+    """폭 정의 v2 시계열 — 유니버스 = 패널 ∩ KRX 상장 주권 (ETF·ETN 제외).
+
+    P일 행은 ka10066 KRX 확정 종가로 대체하고 (MDC 최종일은 15:35 잠정), P일 상승·하락은
+    KRX 공식 등락률(기준가 대비)로 집계한다. P 이전 행은 MDC 확정값 (V1 표본 1,742건 0원 일치).
+    A/D 누적 기준점 = 패널 첫날 (brief_config.AD_ORIGIN). MDC 파일은 읽기만 한다.
+    한계: 유니버스는 현재 상장 주권 — 과거 상장폐지 종목 누락(생존편향).
+    """
+    from market_breadth import pct_above_ma200
     panel = pd.read_parquet(os.path.join(DATA, 'breadth_close_panel.parquet'))
     universe = universe if universe is not None else stock_universe()
-    codes = [c for c in official['codes'] if c in panel.columns and c in universe]
+    codes = [c for c in panel.columns if c in universe]
     pnl = panel[codes].copy()
     pnl.index = [d.date() for d in pd.DatetimeIndex(pnl.index)]
-    pnl = pnl[[d <= p for d in pnl.index]]
-    row = pd.Series({c: official['codes'][c]['px'] for c in codes})
-    pnl.loc[p] = row          # 잠정 행 덮어쓰기 또는 누락 시 추가 (메모리 내)
-    pnl = pnl.sort_index()
-    line, diff, up, dn = ad_line(pnl)
-    pa = pct_above_ma200(pnl)
-    # 최종일 상승·하락은 KRX 공식 등락률(기준가 대비)로 — 거래정지 등 종가 동일 종목 처리 일치
-    flu = pd.Series({c: official['codes'][c]['flu'] for c in codes})
-    up_o, dn_o = int((flu > 0).sum()), int((flu < 0).sum())
-    line = line.copy()
-    line.iloc[-1] = line.iloc[-2] + (up_o - dn_o)
-    return {'pct_above200': float(pa.iloc[-1]), 'ad_cum': float(line.iloc[-1]),
-            'ad_chg20': float(line.iloc[-1] - line.iloc[-21]), 'up': up_o, 'dn': dn_o,
-            'universe': len(codes), 'panel_rows_before_p': int((pnl.index < p).sum())}
+    pnl = pnl[[d <= p and d >= pd.Timestamp(cfg.AD_ORIGIN).date() for d in pnl.index]]
+    if official is not None:
+        pnl.loc[p] = pd.Series({c: official['codes'][c]['px'] if c in official['codes']
+                                else np.nan for c in codes})
+        pnl = pnl.sort_index()
+    chg = pnl.pct_change(fill_method=None)
+    up, dn = (chg > 0).sum(axis=1), (chg < 0).sum(axis=1)
+    if official is not None:
+        flu = pd.Series({c: official['codes'][c]['flu'] for c in codes if c in official['codes']})
+        up.loc[p], dn.loc[p] = int((flu > 0).sum()), int((flu < 0).sum())
+    out = pd.DataFrame({'up': up, 'dn': dn})
+    out['ad_diff'] = out['up'] - out['dn']
+    out.iloc[0, out.columns.get_loc('ad_diff')] = 0      # 기준점 당일은 변화 없음
+    out['ad_cum'] = out['ad_diff'].cumsum()
+    out['pct_above200'] = pct_above_ma200(pnl)
+    out['universe'] = len(codes)
+    return out
+
+
+def breadth_confirmed(official: dict, p: date, universe: set = None) -> dict:
+    f = breadth_frame(p, official, universe)
+    last = f.iloc[-1]
+    return {'pct_above200': float(last['pct_above200']), 'ad_cum': float(last['ad_cum']),
+            'ad_chg20': float(last['ad_cum'] - f['ad_cum'].iloc[-21]),
+            'up': int(last['up']), 'dn': int(last['dn']), 'universe': int(last['universe']),
+            'date': f.index[-1]}
 
 
 def market_foreign_z(official_frgn_eok: float, p: date) -> dict:

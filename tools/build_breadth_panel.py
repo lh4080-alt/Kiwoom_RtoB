@@ -19,7 +19,10 @@ STOCKS_DIR = r'C:\market_data\bars_1d\stocks'
 INDEX_DIR = r'C:\market_data\bars_1d\index\001'
 OUT_PANEL = r'C:\Kiwoom_RtoB\config\data\breadth_close_panel.parquet'
 OUT_KOSPI = r'C:\Kiwoom_RtoB\config\data\kospi_daily_ohlc.parquet'
-YEARS = ('2025', '2026')  # MA200(200거래일≈10개월) + 여유 → 최근 2개 연도면 충분
+# 2025년부터 올해까지 — A/D 누적 기준점(brief_config.AD_ORIGIN=2025-01-02) 고정을 위해 시작 연도
+# 고정. 기존 ('2025','2026') 하드코딩은 2027년에 패널이 비는 문제가 있었음 (2026-10-09)
+import datetime as _dt
+YEARS = tuple(str(y) for y in range(2025, _dt.date.today().year + 1))
 
 
 def build(years=None, out_panel=None):
