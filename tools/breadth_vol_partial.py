@@ -36,7 +36,12 @@ def main() -> int:
     controls = pd.DataFrame({'rv20': r.rolling(20).std(), 'abs_r': r.abs()})
     pnl = pd.read_parquet(os.path.join(ROOT, 'config', 'data', 'breadth_k81_panel.parquet'))
     univ = stock_universe()
-    br = breadth_indicators(pnl[[c for c in pnl.columns if c in univ]], ad_line, pct_above_ma200)
+    clean = pnl[[c for c in pnl.columns if c in univ]]
+    br = breadth_indicators(clean, ad_line, pct_above_ma200)
+    # 브리프 표시 지표 — A/D 20일 비율(상승÷하락, 유니버스 크기 무관)
+    chg = clean.pct_change(fill_method=None)
+    up, dn = (chg > 0).sum(axis=1), (chg < 0).sum(axis=1)
+    br['ad_ratio20'] = up.rolling(20).sum() / dn.rolling(20).sum().replace(0, np.nan)
     br.index = pd.DatetimeIndex(br.index)
     print(f'{"폭 지표":<22}{"타깃":>5}{"n":>6} | {"통제 전 t":>9} | {"통제 후 t":>9}{"rv20 t":>8}{"|r| t":>7}  판정')
     print('-' * 86)
