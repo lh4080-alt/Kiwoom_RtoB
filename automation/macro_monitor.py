@@ -234,12 +234,20 @@ def upsert_daily_record(record: dict, path: str = None):
     os.replace(tmp, path)
 
 
-def load_history(path: str = None) -> list:
+def load_history(path: str = None, raw: bool = False) -> list:
+    """raw=True: 무효 가림 없이 (기록기 건강 점검 전용 — 값을 계산에 쓰지 말 것)."""
     path = path or JSONL_PATH
     if not os.path.exists(path):
         return []
     with open(path, encoding='utf-8') as f:
-        return [json.loads(l) for l in f if l.strip()]
+        rows = [json.loads(l) for l in f if l.strip()]
+    # invalid[필드]가 붙은 값은 None으로 가림 (2026-10-10 Lee 지시 — 플래그 값은 어떤 계산에서도 읽지 않음).
+    # 쓰기 경로(upsert_daily_record·clear_fields)는 원본 파일을 직접 읽으므로 디스크 값은 그대로 남는다.
+    for r in ([] if raw else rows):
+        for fld in (r.get('invalid') or {}):
+            if fld in r:
+                r[fld] = None
+    return rows
 
 
 def clear_fields(date: str, fields: list, path: str = None):

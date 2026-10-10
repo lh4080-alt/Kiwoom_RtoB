@@ -59,7 +59,7 @@ def run_checks(cross_alerts: list = None) -> dict:
     sys.path.insert(0, BASE)
     from macro_monitor import JSONL_PATH, load_history
     alerts = _selftest() + list(cross_alerts or [])
-    hist = load_history()
+    hist = load_history(raw=True)   # 기록기 건강 점검 — 무효 가림 없이
     now = datetime.now().isoformat(timespec='seconds')
 
     last = hist[-1] if hist else {}
@@ -214,7 +214,7 @@ if __name__ == '__main__':
 
     async def main():
         token = await get_semi_token()
-        flow_rows = [r for r in load_history() if r.get('flows')]
+        flow_rows = [r for r in load_history(raw=True) if r.get('flows')]
         cross = (await verify_flows_cross(token, flow_rows[-1])) if flow_rows \
             else ['flows 행 없음']
         res = run_checks(cross)
