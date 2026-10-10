@@ -442,8 +442,11 @@ def render(d: dict, state: dict = None, failures: list = None) -> str:
         hit = (st.get('pat_cum20') == ref['code'] if ref['kind'] == 'pat_cum20'
                else st.get('cluster') == ref['code'])
         if hit and st.get('date') == p:
+            codes = {'000660': ('000660',), 'block': ('005930', '000660')}.get(ref['univ'], ('005930', '000660'))
+            bb = any(b['code'] in codes and b['start'] <= str(p) <= b['end'] for b in cfg.BUYBACK_PERIODS)
             lines.append(f"참고: {ref['label']} — 과거 같은 상태 {ref['n']}회·에피소드 {ref['eps']}건·"
-                         f"이후 {ref['h']}일 기저 대비 {ref['diff']:+.1f}%p (전방 검증 중)")
+                         f"이후 {ref['h']}일 기저 대비 {ref['diff']:+.1f}%p (전방 검증 중"
+                         + (' · 자사주 매입 구간' if bb else '') + ')')
     lines.append(f"폭 200일선 위 {b['pct_above200']:.0f}% · A/D 20일 비율 {b['ad_ratio20']:.2f} "
                  f"({b['ad_ratio20_pctile']:.0f}%ile)")
     u, x = d['us10y'], d['usdkrw']
