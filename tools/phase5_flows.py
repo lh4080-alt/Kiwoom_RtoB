@@ -271,7 +271,15 @@ def run_earnings(feats, targets):
         ohlc = OPENS[code]
         px = ohlc['close']
         f = feats[code]
+        # 분기별 첫 잠정실적만 (v1.1) — 보고 분기 = 공시일 직전 분기말. 같은 분기의 확정치(월말)·
+        # 정정 공시는 제외해 분기당 1건
+        firsts = {}
         for x in sorted(disc, key=lambda v: v['datetime']):
+            t = pd.Timestamp(x['datetime'])
+            q_end = (t - pd.offsets.QuarterEnd(1)).normalize() if not t.is_quarter_end else t.normalize()
+            firsts.setdefault(q_end, x)
+        print(f'[실적] {code} 비정정 공시 {len(disc)}건 → 분기별 첫 잠정 {len(firsts)}건')
+        for x in sorted(firsts.values(), key=lambda v: v['datetime']):
             t = pd.Timestamp(x['datetime'])
             if t < EVAL_START:
                 continue
@@ -284,7 +292,7 @@ def run_earnings(feats, targets):
             i = px.index.get_loc(D_)
             if i < 21 or i + 21 > len(px):
                 continue
-            kind = ('잠정' if t.day <= 15 else '확정') if code == '005930' else '잠정'
+            kind = '분기 첫 잠정'
             rows.append({'code': code, 'disclosed': t, 'kind': kind, 'D': dd,
                          'pre20': (px.iloc[i - 1] / px.iloc[i - 21] - 1) * 100,
                          'react': (px.iloc[i] / px.iloc[i - 1] - 1) * 100,
@@ -343,6 +351,18 @@ def main() -> int:
     targets = target_index()
     feats = {u: features(a[a.index >= EVAL_START - pd.Timedelta(days=200)]) for u, a in aggs.items()}
     feats = {u: f[f.index >= EVAL_START] for u, f in feats.items()}
+    # Σ주권 대조 — 시장 단위 원천 대비 비율 (생존편향 크기, 연도별 중앙값)
+    ms, mk = aggs['market_sum'], aggs['market']
+    j = pd.concat([ms['frgn'].rename('sum'), mk['frgn'].rename('mkt'),
+                   ms['tv'].rename('tv_sum'), mk['tv'].rename('tv_mkt')], axis=1).dropna()
+    yr = j.groupby(j.index.year).apply(lambda g: pd.Series({
+        'days': len(g), 'tv_ratio_median': (g['tv_sum'] / g['tv_mkt']).median(),
+        'frgn_corr': g['sum'].corr(g['mkt']),
+        'frgn_abs_dev_median_eok': ((g['sum'] - g['mkt']).abs() / 100).median()}))
+    yr.to_csv(os.path.join(OUT, 'market_sum_vs_market.csv'), encoding='utf-8-sig')
+    print('[Σ주권 vs 시장 단위] 연도별 거래대금 비율·외인 상관:')
+    print(yr.round(3).to_string())
+    feats.pop('market_sum', None)
     run_patterns(feats, targets)
     run_absorption(feats, targets)
     run_exhaustion(feats, targets)

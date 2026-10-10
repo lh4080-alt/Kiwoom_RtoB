@@ -22,8 +22,24 @@ PATTERN_NAMES = {
 SEMI = ('005930', '000660')
 
 
+MARKET_K51 = os.path.join(DATA, 'market_flows_k51.parquet')
+
+
+def load_market() -> pd.DataFrame:
+    """시장 합계 — ka10051 001(억원) → 백만원, 거래대금 ka20006(백만원). 사전 선언 v1.1."""
+    m = pd.read_parquet(MARKET_K51)
+    out = pd.DataFrame(index=pd.DatetimeIndex(m.index))
+    for c in ('frgn', 'natfor', 'orgn', 'ind', 'etc_corp'):
+        out[c] = m[c].values * 100
+    out['tv'] = m['tv_mil'].values
+    return out.sort_index()
+
+
 def load_aggregates(codes: list = None) -> dict:
-    """{'market','block','005930','000660'} → DataFrame(index=date, cols=COLS) 합계."""
+    """{'market','block','005930','000660','market_sum'} → DataFrame(index=date, cols=COLS).
+
+    market = 시장 단위 원천 (load_market). market_sum = 현재 상장 주권 합산 — 생존편향이 있어 대조용만.
+    """
     files = sorted(f for f in os.listdir(FLOWS_DIR) if f.endswith('.parquet'))
     if codes is not None:
         files = [f for f in files if f[:-8] in codes]
@@ -34,7 +50,7 @@ def load_aggregates(codes: list = None) -> dict:
         if code in SEMI:
             per[code] = df
         total = df if total is None else total.add(df, fill_value=0)
-    out = {'market': total.sort_index()}
+    out = {'market': load_market(), 'market_sum': total.sort_index()}
     if all(c in per for c in SEMI):
         out['block'] = per[SEMI[0]].add(per[SEMI[1]], fill_value=0).sort_index()
         for c in SEMI:

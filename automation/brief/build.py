@@ -241,16 +241,17 @@ def breadth_confirmed(official: dict, p: date, universe: set = None) -> dict:
 
 
 def market_foreign_z(official_frgn_eok: float, p: date) -> dict:
-    path = os.path.join(DATA, 'market_foreign.parquet')
+    """시장 외인 z — 이력은 시장 단위 원천 ka10051(억원, v1.1). 종목 합산 이력은 생존편향으로 폐기."""
+    path = os.path.join(DATA, 'market_flows_k51.parquet')
     if not os.path.exists(path):
         return {'z20': None, 'z60': None, 'last': None, 'n': 0}
-    s = pd.read_parquet(path)['frgn_eok']
+    s = pd.read_parquet(path)['frgn']
     s.index = [d.date() for d in pd.DatetimeIndex(s.index)]
-    if official_frgn_eok is None:      # 재생 — P까지 ka10059 합산(확정) 그대로
-        s = s[[d <= p for d in s.index]]
-    else:
-        s = s[[d < p for d in s.index]]
-        s.loc[p] = official_frgn_eok  # 최종 세션은 ka10066 확정 합
+    s = s[[d <= p for d in s.index]]
+    # P일은 시장 단위 원천(04:50 갱신)이 우선. 없을 때만 ka10066 주권 합으로 보충
+    # (최근일 Σ주권/시장 = 1.000 실측 — 보충값 사용 시 last_date는 그대로 P)
+    if p not in s.index and official_frgn_eok is not None:
+        s.loc[p] = official_frgn_eok
     s = s.sort_index()
     out = {'last': float(s.iloc[-1]), 'n': int(len(s)), 'last_date': s.index[-1]}
     for w in (20, 60):
