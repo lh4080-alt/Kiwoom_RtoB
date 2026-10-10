@@ -154,6 +154,26 @@ async def fetch_kospi_index_closes(token: str, base_dt: str, min_bars: int = 300
     return closes
 
 
+def _abs_px(v):
+    try:
+        return abs(float(str(v).replace(',', '').replace('+', '')))
+    except (TypeError, ValueError):
+        return None
+
+
+def date_by_price(px: dict, closes: dict, codes: list, candidates: list):
+    """응답 가격(px: {code: 가격})이 종가(closes: {code: {YYYYMMDD: close}})와 전부 일치하는 후보 날짜.
+
+    비교 종목 2개 이상, 일치 날짜가 정확히 1개일 때만 그 날짜 — 아니면 None (모호·불일치).
+    """
+    chk = [c for c in codes if px.get(c) and c in closes]
+    if len(chk) < 2:
+        return None
+    hits = [d for d in candidates
+            if all(closes[c].get(d) is not None and abs(closes[c][d] - px[c]) < 0.5 for c in chk)]
+    return hits[0] if len(hits) == 1 else None
+
+
 def _daily_returns(closes: dict) -> dict:
     """{date(YYYYMMDD): close} → {date: ret_pct} (date ASC). 전일 대비 %."""
     dates = sorted(closes.keys())
@@ -569,6 +589,7 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
     # 대상: 반도체 블록 3종 + 기타 13 섹터 ETF (총 16종목)
     foreign_net = None
     flows = {}
+    rows66 = []
     try:
         from utils.rate_limiter import requests
         import utils.config as config
@@ -612,17 +633,21 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
     except Exception:
         logger.exception('[macro] ka10066 수급 수집 실패')
 
-    # ka10066은 16:50 시점에 당일 KRX 집계가 미반영된 '전일 거래일 확정분'을 반환
-    # (2026-10-07 검증: jsonl 9/17 flows = ka10059 9/16, 10/6 기록 = 10/2 분).
-    # → 전일 거래일 행에 기록 (당일 행 오염 방지 — kospi_r T+1 사고와 동족 문제)
+    # ka10066 응답에는 날짜가 없다 — 16:50엔 전일분이 왔지만(2026-10-07 검증) 실행 시각에 기대지 않고
+    # 응답 cur_prc를 ka10081 종가와 맞춰 날짜를 판정한다 (2026-10-10: 실행 20:30 이동 대비).
     prev_trade = None
     for k in sorted(kospi_closes.keys(), reverse=True):
         if k.replace('-', '') < today:
             prev_trade = k.replace('-', '')
             break
+    px66 = {str(it.get('stk_cd', '')).strip(): _abs_px(it.get('cur_prc')) for it in rows66}
+    flows_date = date_by_price(px66, kr, [c for c, _ in SEMIS], [d for d in (today, prev_trade) if d])
     # foreign_net_eok 기록 중단 (2026-10-10) — 시장 외인은 ka10051(market_flows_k51) 단일 원천
-    if prev_trade and flows:
-        upsert_daily_record({'date': prev_trade, 'flows': flows})
+    if flows and flows_date:
+        upsert_daily_record({'date': flows_date, 'flows': flows})
+    elif flows:
+        logger.warning(f'[macro] ka10066 날짜 판정 실패 (당일 {today}·전일 {prev_trade} 어느 쪽 종가와도 '
+                       f'유일 일치 안 함) — flows 미기록')
 
     record = {
         'date': today,
