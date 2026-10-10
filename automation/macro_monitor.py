@@ -610,10 +610,9 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
         if k.replace('-', '') < today:
             prev_trade = k.replace('-', '')
             break
-    if prev_trade and (flows or foreign_net is not None):
-        upsert_daily_record({'date': prev_trade,
-                             'flows': flows or None,
-                             'foreign_net_eok': foreign_net})
+    # foreign_net_eok 기록 중단 (2026-10-10) — 시장 외인은 ka10051(market_flows_k51) 단일 원천
+    if prev_trade and flows:
+        upsert_daily_record({'date': prev_trade, 'flows': flows})
 
     record = {
         'date': today,
@@ -666,6 +665,24 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
 
 
 # ── 리포트 ───────────────────────────────────────────────────
+def k51_foreign_z(ref_date: str):
+    """시장 외인 순매수(억원, ka10051 001) — ref_date 이하 마지막 값과 z5/z20/z60 (직전 창, ddof=1)."""
+    import pandas as pd
+    path = os.path.join(BASE_DIR, 'config', 'data', 'market_flows_k51.parquet')
+    if not os.path.exists(path):
+        return None
+    s = pd.read_parquet(path)['frgn']
+    s = s[s.index <= pd.Timestamp(ref_date)]
+    if len(s) < 61:
+        return None
+    out = {'last': float(s.iloc[-1]), 'date': s.index[-1]}
+    for w in (5, 20, 60):
+        base = s.iloc[-w - 1:-1]
+        sd = base.std(ddof=1)
+        out[f'z{w}'] = float((s.iloc[-1] - base.mean()) / sd) if sd else None
+    return out
+
+
 def format_report(record: dict) -> str:
     today = record['date']
     disp = f"{today[4:6]}-{today[6:]}"
@@ -864,25 +881,14 @@ def format_report(record: dict) -> str:
                 lines.append(f"   ↳ 두드러진 섹터: {top_in[0]} {top_in[1]:+,.0f}억 유입 · "
                              f"{top_out[0]} {top_out[1]:+,.0f}억 이탈")
 
-    # 외인 시장 전체 수급 z-score (ka10058 축적본, 지시서 6번)
-    fn_series = [r.get('foreign_net_eok') for r in history if r.get('foreign_net_eok') is not None]
-    if len(fn_series) >= 20:
-        def fz(n):
-            vals = fn_series[-n:]
-            if len(vals) < max(10, n // 2):
-                return None
-            m = sum(vals) / len(vals)
-            sd = (sum((v - m) ** 2 for v in vals) / len(vals)) ** 0.5
-            return (fn_series[-1] - m) / sd if sd > 0 else None
-
-        def zf(v):
-            return 'N/A' if v is None else f"{v:+.1f}σ"
-
-        z5v, z20v, z60v = fz(5), fz(20), fz(60)
+    # 외인 시장 수급 z — ka10051 업종 001 이력 (2026-10-10: jsonl foreign_net_eok는 오염 이력이라 읽지 않음)
+    kf = k51_foreign_z(record['date'])
+    if kf:
+        zf = lambda v: 'N/A' if v is None else f"{v:+.1f}σ"  # noqa: E731
         trend_word = ''
-        if z5v is not None and z60v is not None and z5v != 0 and z60v != 0:
-            trend_word = ' · 추세 확정' if (z5v > 0) == (z60v > 0) else ' · 전환 구간'
-        lines.append(f"   외인 시장 수급: z5 {zf(z5v)} / z20 {zf(z20v)} / z60 {zf(z60v)}{trend_word}")
+        if kf['z5'] and kf['z60']:
+            trend_word = ' · 추세 확정' if (kf['z5'] > 0) == (kf['z60'] > 0) else ' · 전환 구간'
+        lines.append(f"   외인 시장 수급: z5 {zf(kf['z5'])} / z20 {zf(kf['z20'])} / z60 {zf(kf['z60'])}{trend_word}")
 
     lines.append("━━ 회전 관찰 ━━")
     sp = record.get('rotation_spread')
@@ -901,29 +907,10 @@ def format_report(record: dict) -> str:
     if b.get('ad_line') is not None:
         lines.append(f"   A/D: 상승 {b.get('advancers', '-')} / 하락 {b.get('decliners', '-')}"
                      f" · 라인 변화 {b.get('ad_change_1d', 0):+d} (누적 {b['ad_line']:+d})")
-    # 외인 시장 수급: 당일 값 + z5/z20/z60 (ka10058 축적본, 2026-09-16 지시서 6번)
-    fn = record.get('foreign_net_eok')
-    if fn is not None:
-        fvals = [r.get('foreign_net_eok') for r in history
-                 if r.get('foreign_net_eok') is not None]
-
-        def fz(n):
-            vals = fvals[-n:]
-            if len(vals) < max(10, n // 2):
-                return None
-            m = sum(vals) / len(vals)
-            sd = (sum((v - m) ** 2 for v in vals) / len(vals)) ** 0.5
-            return (fn - m) / sd if sd > 0 else None
-
-        def zf(v):
-            return 'N/A' if v is None else f"{v:+.1f}σ"
-
-        z5, z20, z60 = fz(5), fz(20), fz(60)
-        trend_word = ''
-        if z5 is not None and z60 is not None and z5 != 0 and z60 != 0:
-            trend_word = ' · 추세 확정' if (z5 > 0) == (z60 > 0) else ' · 전환 구간'
-        lines.append(f"   외인 시장 순매수 {fn:+,.0f}억 "
-                     f"(z5 {zf(z5)} / z20 {zf(z20)} / z60 {zf(z60)}){trend_word}")
+    # 외인 시장 순매수 당일 값 + z — ka10051 (jsonl foreign_net_eok 미사용)
+    if kf:
+        lines.append(f"   외인 시장 순매수 {kf['last']:+,.0f}억 "
+                     f"(z5 {zf(kf['z5'])} / z20 {zf(kf['z20'])} / z60 {zf(kf['z60'])}){trend_word}")
 
     lines.append("━━ 전야 미국 ━━ (5일 흐름: 과거→오늘)")
     lines.append(f"🌐 나스닥F {pct(record.get('nq_overnight'))}  5일: {seq('nq_overnight', f1)}")
