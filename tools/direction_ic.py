@@ -83,9 +83,10 @@ def load_candidates(k: pd.Series) -> pd.DataFrame:
     for m, n in ((3, 63), (6, 126), (12, 252)):
         out[f'모멘텀{m}개월'] = (s / s.shift(n) - 1).values * 100
     # 외인 z (장기 이력 있을 때 — 브리프와 같은 정의: 당일 값 vs 직전 N일)
-    p = os.path.join(D, 'market_foreign_long.parquet')
+    # 시장 단위 원천 ka10051(억원) — 종목 합산 이력은 생존편향으로 교체 (Phase 5 v1.1, 2026-10-10)
+    p = os.path.join(D, 'market_flows_k51.parquet')
     if os.path.exists(p):
-        f = pd.read_parquet(p)['frgn_eok']
+        f = pd.read_parquet(p)['frgn']
         f.index = [d.date() for d in pd.DatetimeIndex(f.index)]
         f = f.reindex(idx)
         for w in (20, 60):
