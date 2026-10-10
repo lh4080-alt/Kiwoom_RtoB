@@ -430,12 +430,20 @@ def render(d: dict, state: dict = None, failures: list = None) -> str:
                  + (lag_tag(f.get('last_date'), p) if f.get('n') else ' (결측)'))
     fm = (d.get('flows3') or {}).get('market')
     if fm:
-        ab = (f"흡수율 {fm['absorb20'] * 100:.0f}%" if fm.get('absorb20') is not None
+        ab = (f"흡수: 기관 {fm['absorb20'] * 100:.0f}% · 기타법인 {fm['absorb20_etc'] * 100:.0f}%"
+              if fm.get('absorb20') is not None and fm.get('absorb20_etc') is not None
               else '외인 20일 순매수')
         lines.append(f"수급 {fm['pat_name']}(20일) · {ab} · 외인 20일 {money_eok(fm['frgn20_eok'])}"
                      + lag_tag(fm['date'], p))
     else:
         lines.append('수급 N/A (3자 수급 미산출)')
+    for ref in cfg.FLOWS_REF:                       # Phase 5 방향 합격 셀 — 해당 상태일 때만
+        st = (d.get('flows3') or {}).get(ref['univ']) or {}
+        hit = (st.get('pat_cum20') == ref['code'] if ref['kind'] == 'pat_cum20'
+               else st.get('cluster') == ref['code'])
+        if hit and st.get('date') == p:
+            lines.append(f"참고: {ref['label']} — 과거 같은 상태 {ref['n']}회·에피소드 {ref['eps']}건·"
+                         f"이후 {ref['h']}일 기저 대비 {ref['diff']:+.1f}%p (전방 검증 중)")
     lines.append(f"폭 200일선 위 {b['pct_above200']:.0f}% · A/D 20일 비율 {b['ad_ratio20']:.2f} "
                  f"({b['ad_ratio20_pctile']:.0f}%ile)")
     u, x = d['us10y'], d['usdkrw']

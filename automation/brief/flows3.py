@@ -196,7 +196,7 @@ def flows_state(p, kospi_close: pd.Series, with_model: bool = True) -> dict:
     mk = pd.read_parquet(MARKET_K51)
     out['k51_row'] = ({c: float(mk.loc[pd.Timestamp(p), c]) for c in ('frgn', 'natfor', 'ind')}
                       if pd.Timestamp(p) in mk.index else None)
-    for univ in ('market', 'block'):
+    for univ in ('market', 'block', '000660'):
         a = aggs[univ]
         a = a[a.index <= pd.Timestamp(p)]
         f = features(a)
@@ -208,8 +208,14 @@ def flows_state(p, kospi_close: pd.Series, with_model: bool = True) -> dict:
               'absorb': None if np.isnan(r['absorb']) else float(r['absorb']),
               'absorb20': None if np.isnan(r['absorb20']) else float(r['absorb20']),
               'frgn20_eok': float(r['frgn_c20_amt']) / 100,
+              'etc20_eok': float(r['etc_corp_c20_amt']) / 100,
+              # 흡수율 v2 (2026-10-10, 별도 버전 — v1 검증 결과를 빌려 쓰지 않음): 기타법인 몫·기관+기타법인
+              'absorb20_etc': (float(r['etc_corp_c20_amt'] / abs(r['frgn_c20_amt']))
+                               if r['frgn_c20_amt'] < 0 else None),
+              'absorb20_v2': (float((r['orgn_c20_amt'] + r['etc_corp_c20_amt']) / abs(r['frgn_c20_amt']))
+                              if r['frgn_c20_amt'] < 0 else None),
               'exhaustion_signal': bool(exhaustion_signals(f)[-1])}
-        if with_model:
+        if with_model and univ != '000660':
             try:
                 st['cluster'] = cluster_labels(f, only_last=True).iloc[-1]
                 st['cluster'] = None if np.isnan(st['cluster']) else int(st['cluster'])
