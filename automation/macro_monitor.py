@@ -675,7 +675,7 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
         axes = market_axes.compute_axes(today, kospi_closes, (breadth or {}).get('adx_14'))
         record['axes'] = axes
         f_rec = market_axes.record_forward(today, axes, breadth)
-        record['axes_signal'] = f_rec.get('signal_mu_sox')
+        # axes_signal(섀도 신호 복사) 폐지 (2026-10-10) — 섀도 조인은 채점 시 사전선언 규칙으로만
     except Exception:
         logger.exception('[macro] 4축·전방 로그 실패 — 무영향')
     # 미확정 값 무효 플래그 (2026-10-10 Lee 지시) — 값은 그대로 두고 계산에서만 제외.

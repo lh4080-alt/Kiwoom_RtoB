@@ -85,26 +85,15 @@ def record_forward(today: str, axes: dict, breadth: dict) -> dict:
                         return {'skipped': True}
                 except Exception:
                     continue
-    # 신호 — semi 섀도(당일 아침 기록)에서
-    sig_mu_sox = sig_sox = None
-    shadow = os.path.join(BASE, '..', 'config', 'data', 'semi_shadow.jsonl')
-    if os.path.exists(shadow):
-        with open(shadow, encoding='utf-8') as f:
-            for line in f:
-                try:
-                    r = json.loads(line)
-                except Exception:
-                    continue
-                if r.get('date') == today and r.get('code') == '005930':
-                    sig_mu_sox = r.get('new_signal')
-                    sig_sox = r.get('new_signal_v2_sox_only')
+    # semi 섀도 신호는 기록 시점에 조인하지 않는다 (2026-10-10). 섀도 행은 다음 날 05:30에 date=P(ISO)로
+    # 기록돼 당일 20:30엔 존재하지 않고, 형식(YYYYMMDD vs ISO)도 달라 테스트 행만 잡혔다(10/7 사례).
+    # 조인은 채점 시 사전선언 규칙으로만 — Docs/semi_shadow_채점_사전선언.md
     pctile = (breadth or {}).get('atr14_pctile')
     bucket = (0 if pctile is None else min(int(pctile // 20), 4)) + 1  # Q1~Q5
     rec = {'date': today, 'logged_at': datetime.now().isoformat(timespec='seconds'),
            **{k: axes.get(k) for k in ('axis1', 'axis2', 'axis3', 'axis4')},
            'above200': axes.get('above200'), 'ma200_break_days': axes.get('ma200_break_days'),
-           'vol_bucket_q': bucket,
-           'signal_mu_sox': sig_mu_sox, 'signal_v2_sox_only': sig_sox}
+           'vol_bucket_q': bucket}
     with open(FORWARD_PATH, 'a', encoding='utf-8') as f:
         f.write(json.dumps(rec, ensure_ascii=False) + '\n')
     return rec
