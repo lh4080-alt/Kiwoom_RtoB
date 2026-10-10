@@ -67,9 +67,10 @@ def run_checks(cross_alerts: list = None) -> dict:
         alerts.append('flows 기록 행 없음 — 소스 누락?')
 
     last = hist[-1] if hist else {}
-    fn = last.get('foreign_net_eok')
-    if fn is not None and abs(fn) > FN_LIMIT:
-        alerts.append(f'이상치: 외인 시장 합 {fn:+,.0f}억 — 임계 {FN_LIMIT:,}억 초과')
+    from macro_monitor import k51_foreign_z
+    kf = k51_foreign_z(last.get('date', '99991231')) if last else None
+    if kf and abs(kf['last']) > FN_LIMIT:
+        alerts.append(f"이상치: 외인 시장(ka10051) {kf['last']:+,.0f}억 — 임계 {FN_LIMIT:,}억 초과")
     if last.get('kospi_ret') is None:
         alerts.append('소스 누락: kospi_ret None (T+1 소급 대기 중일 수 있음 — 익일 재확인)')
     b = last.get('breadth') or {}
@@ -223,3 +224,48 @@ if __name__ == '__main__':
             await tel_send('⚠️ [품질점검] ' + ' | '.join(res['sent']))
 
     sys.exit(asyncio.run(main()))
+
+
+# ── 시장 외인 일일 대조 (2026-10-10 Lee 지시 — ka10051 단위·정합 상시 감시) ──
+MKT_SUM_TOL = (0.01, 100)    # ka10051 vs Σ주권: max(1%, 100억)
+NAVER_TOL_FRGN = 100         # 억원 — 외국인+기타외국인
+NAVER_TOL_IND = 1            # 억원 — 개인은 60일 중 57일 정확 일치
+
+
+def naver_index_trend(p) -> dict:
+    """네이버 KOSPI 투자자 동향 (bizdate=P) — 응답 날짜가 P가 아니면 None."""
+    import requests
+    from brief.units import to_eok
+    try:
+        js = requests.get(f'https://m.stock.naver.com/api/index/KOSPI/trend?bizdate={p:%Y%m%d}',
+                          headers={'User-Agent': 'Mozilla/5.0'}, timeout=20).json()
+        if js.get('bizdate') != f'{p:%Y%m%d}':
+            return None
+        return {'frgn': to_eok(js['foreignValue'], 'naver_index_trend'),
+                'ind': to_eok(js['personalValue'], 'naver_index_trend'),
+                'inst': to_eok(js['institutionalValue'], 'naver_index_trend')}
+    except Exception:
+        return None
+
+
+def market_flow_crosscheck(p, k51_row: dict, sum_frgn_eok, naver: dict) -> list:
+    """k51_row: {'frgn','natfor','ind'} 억원 (ka10051 P일). 반환: 알림 문자열 목록."""
+    alerts = []
+    if k51_row is None:
+        return [f'대조: ka10051 {p} 행 없음 (04:40 갱신 실패?)']
+    f = k51_row['frgn']
+    if sum_frgn_eok is None:
+        alerts.append(f'대조: Σ주권(ka10059) {p} 없음')
+    else:
+        tol = max(abs(f) * MKT_SUM_TOL[0], MKT_SUM_TOL[1])
+        if abs(f - sum_frgn_eok) > tol:
+            alerts.append(f'대조: 시장 외인 ka10051 {f:+,.0f} vs Σ주권 {sum_frgn_eok:+,.0f}억 (허용 {tol:,.0f})')
+    if naver is None:
+        alerts.append(f'대조: 네이버 지수 투자자 {p} 응답 없음')
+    else:
+        fn = f + (k51_row.get('natfor') or 0)
+        if abs(fn - naver['frgn']) > NAVER_TOL_FRGN:
+            alerts.append(f"대조: 외인 ka10051 {fn:+,.0f} vs 네이버 {naver['frgn']:+,.0f}억")
+        if abs(k51_row['ind'] - naver['ind']) > NAVER_TOL_IND:
+            alerts.append(f"대조: 개인 ka10051 {k51_row['ind']:+,.0f} vs 네이버 {naver['ind']:+,.0f}억")
+    return alerts

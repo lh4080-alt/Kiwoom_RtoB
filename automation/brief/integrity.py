@@ -31,7 +31,12 @@ def run_checks(d: dict) -> list:
             fails.append(f'시점: {nm} 수급 최신 {s["frgn_last"]} ≠ {p}')
     if d['breadth'].get('date') != p:
         fails.append(f'시점: 폭 최종일 {d["breadth"].get("date")} ≠ {p}')
-    fm = (d.get('flows3') or {}).get('market') or {}
+    fl3 = d.get('flows3') or {}
+    if 'naver_index' in d:                      # 실시간 실행만 (재생은 외부 당일값 없음)
+        from data_quality import market_flow_crosscheck
+        fails += market_flow_crosscheck(p, fl3.get('k51_row'), fl3.get('market_sum_frgn_eok'),
+                                        d['naver_index'])
+    fm = fl3.get('market') or {}
     if fm.get('date') != p:
         fails.append(f"시점: 3자 수급 최신 {fm.get('date')} ≠ {p}")
     if d['foreign'].get('last_date') != p:

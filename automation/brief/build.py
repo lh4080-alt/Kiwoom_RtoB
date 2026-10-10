@@ -357,6 +357,9 @@ async def collect(now_kst: datetime = None) -> dict:
                                                index=pd.DatetimeIndex(k.index)))
     except Exception as e:
         d['flows3'] = {'error': str(e)[:80]}
+    if not d.get('replay'):
+        from data_quality import naver_index_trend
+        d['naver_index'] = naver_index_trend(p)
 
     # 미10Y·원달러
     tnx = yf.Ticker('^TNX').history(period='3mo', interval='1d')['Close']

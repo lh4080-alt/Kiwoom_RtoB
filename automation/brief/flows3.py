@@ -190,6 +190,12 @@ def flows_state(p, kospi_close: pd.Series, with_model: bool = True) -> dict:
     """브리프·전방 로그용 — P일 3자 수급 상태 (market·block). 사실 정보만."""
     out = {}
     aggs = load_aggregates()
+    ms = aggs['market_sum']
+    out['market_sum_frgn_eok'] = (float(ms.loc[pd.Timestamp(p), 'frgn']) / 100
+                                  if pd.Timestamp(p) in ms.index else None)
+    mk = pd.read_parquet(MARKET_K51)
+    out['k51_row'] = ({c: float(mk.loc[pd.Timestamp(p), c]) for c in ('frgn', 'natfor', 'ind')}
+                      if pd.Timestamp(p) in mk.index else None)
     for univ in ('market', 'block'):
         a = aggs[univ]
         a = a[a.index <= pd.Timestamp(p)]
