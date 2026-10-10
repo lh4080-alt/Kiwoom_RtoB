@@ -31,6 +31,9 @@ def run_checks(d: dict) -> list:
             fails.append(f'시점: {nm} 수급 최신 {s["frgn_last"]} ≠ {p}')
     if d['breadth'].get('date') != p:
         fails.append(f'시점: 폭 최종일 {d["breadth"].get("date")} ≠ {p}')
+    fm = (d.get('flows3') or {}).get('market') or {}
+    if fm.get('date') != p:
+        fails.append(f"시점: 3자 수급 최신 {fm.get('date')} ≠ {p}")
     if d['foreign'].get('last_date') != p:
         fails.append('시점: 시장 외인 최종일 불일치')
     for d_us in d.get('sessions_used', []):

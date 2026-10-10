@@ -60,6 +60,9 @@ async def main() -> int:
                'atr_pct': d['atr']['pct'], 'atr_pctile': d['atr']['pctile'],
                'us10y': d['us10y']['last'], 'usdkrw': d['usdkrw']['last'],
                'foreign_z20': d['foreign'].get('z20'), 'foreign_z60': d['foreign'].get('z60'),
+               # Phase 5 전방 로그 — 3자 패턴·강도·흡수율·군집·외인 설명분/잔차·매도 종료 신호
+               **{f'flows3_{u}_{k_}': v_ for u, st in (d.get('flows3') or {}).items()
+                  if isinstance(st, dict) for k_, v_ in st.items() if k_ != 'date'},
                **{f'{c}_{k}': d['semi'][c][k] for c in d['semi']
                   for k in ('x', 'z', 'exp_gap', 'ma60', 'ma200', 'frgn20')}}}
     os.makedirs(os.path.dirname(LOG), exist_ok=True)

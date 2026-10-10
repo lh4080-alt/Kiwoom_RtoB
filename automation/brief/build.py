@@ -349,6 +349,13 @@ async def collect(now_kst: datetime = None) -> dict:
     d['replay'] = p != live_p
     d['breadth'] = breadth_confirmed(off, p, univ)
     d['foreign'] = market_foreign_z(off['kospi_frgn_eok'] if off else None, p)
+    # Phase 5 — 3자 수급 상태 (사실 정보, ka10059 flows3)
+    try:
+        from brief.flows3 import flows_state
+        d['flows3'] = flows_state(p, pd.Series(k['close'].astype(float).values,
+                                               index=pd.DatetimeIndex(k.index)))
+    except Exception as e:
+        d['flows3'] = {'error': str(e)[:80]}
 
     # 미10Y·원달러
     tnx = yf.Ticker('^TNX').history(period='3mo', interval='1d')['Close']
@@ -417,6 +424,14 @@ def render(d: dict, state: dict = None, failures: list = None) -> str:
     fz = lambda z: 'N/A' if z is None else f'{z:+.1f}'  # noqa: E731
     lines.append(f"외인 z20 {fz(zs[0])} / z60 {fz(zs[1])}{ext} · 외국인(기타외국인 제외)"
                  + (lag_tag(f.get('last_date'), p) if f.get('n') else ' (결측)'))
+    fm = (d.get('flows3') or {}).get('market')
+    if fm:
+        ab = (f"흡수율 {fm['absorb20'] * 100:.0f}%" if fm.get('absorb20') is not None
+              else '외인 20일 순매수')
+        lines.append(f"수급 {fm['pat_name']}(20일) · {ab} · 외인 20일 {money_eok(fm['frgn20_eok'])}"
+                     + lag_tag(fm['date'], p))
+    else:
+        lines.append('수급 N/A (3자 수급 미산출)')
     lines.append(f"폭 200일선 위 {b['pct_above200']:.0f}% · A/D 20일 비율 {b['ad_ratio20']:.2f} "
                  f"({b['ad_ratio20_pctile']:.0f}%ile)")
     u, x = d['us10y'], d['usdkrw']

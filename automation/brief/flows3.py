@@ -73,3 +73,132 @@ def features(agg: pd.DataFrame) -> pd.DataFrame:
 
 def pattern_name(p: str) -> str:
     return PATTERN_NAMES.get(p, 'N/A') if p else 'N/A'
+
+
+# ── 사전 선언 v1 공통 계산 (tools/phase5_flows.py와 브리프가 같은 함수 사용) ──
+def ecos_series(stat: str, item: str, start: str = '20130101') -> pd.Series:
+    import requests
+    key = os.environ['ECOS_KEY']
+    js = requests.get(f'https://ecos.bok.or.kr/api/StatisticSearch/{key}/json/kr/1/9000/'
+                      f'{stat}/D/{start}/{pd.Timestamp.now():%Y%m%d}/{item}', timeout=120).json()
+    return pd.Series({pd.Timestamp(r['TIME']): float(r['DATA_VALUE'])
+                      for r in js['StatisticSearch']['row']}).sort_index()
+
+
+def external_frame(idx: pd.DatetimeIndex, kospi_close: pd.Series) -> pd.DataFrame:
+    """2-4 설명변수 — 원/달러·원/엔 당일 변화%, 전야 SOX%, 전야 미10Y 변화(bp), 전일 KOSPI%."""
+    from datetime import timedelta
+    import yfinance as yf
+    usd = ecos_series('731Y003', '0000003').pct_change() * 100
+    jpy = ecos_series('731Y001', '0000002').pct_change() * 100
+
+    def us_prev(sym, diff):
+        h = yf.Ticker(sym).history(period='max', interval='1d')['Close']
+        h.index = pd.DatetimeIndex(h.index).tz_localize(None).normalize()
+        h = h[~h.index.duplicated()]
+        return (h.diff() * 100) if diff else (h.pct_change() * 100)
+    sox, tnx = us_prev('^SOX', False), us_prev('^TNX', True)
+    kret = kospi_close.pct_change() * 100
+    return pd.DataFrame({'usd': usd.reindex(idx), 'jpy': jpy.reindex(idx),
+                         'sox': [sox.asof(d - timedelta(days=1)) for d in idx],
+                         'tnx': [tnx.asof(d - timedelta(days=1)) for d in idx],
+                         'kospi_prev': kret.shift(1).reindex(idx)}, index=idx)
+
+
+def resid_expl(y: pd.Series, X: pd.DataFrame, win: int = 250) -> tuple:
+    """OLS 창 t−win..t−1 적합 → t 예측. (잔차, 설명분)."""
+    fit_hat = pd.Series(np.nan, index=y.index)
+    Xv, yv = X.values, y.values
+    for i in range(win, len(y)):
+        Xw, yw = Xv[i - win:i], yv[i - win:i]
+        ok = ~(np.isnan(Xw).any(axis=1) | np.isnan(yw))
+        if ok.sum() < 150 or np.isnan(Xv[i]).any():
+            continue
+        A = np.column_stack([np.ones(ok.sum()), Xw[ok]])
+        b, *_ = np.linalg.lstsq(A, yw[ok], rcond=None)
+        fit_hat.iloc[i] = b[0] + Xv[i] @ b[1:]
+    return y - fit_hat, fit_hat
+
+
+def cluster_labels(f: pd.DataFrame, first_fit: str = '2016-06-30', only_last: bool = False) -> pd.Series:
+    """2-3 walk-forward KMeans(k=4) — 월말까지로 적합, 다음 달 배정. C1..C4 = 중심 외인 좌표 오름차순."""
+    from sklearn.cluster import KMeans
+    Z = f[['frgn_c20_z', 'orgn_c20_z']]
+    lab = pd.Series(np.nan, index=f.index)
+    per = pd.DatetimeIndex(Z.index).to_period('M')
+    months = list(per.unique())
+    if only_last:                      # 브리프 — 마지막 달 배정에 필요한 직전 월 모델 하나만
+        months = [months[-1] - 1]
+    # 마지막 달(현재)도 직전 월말 모델로 배정되도록 루프는 직전 달까지
+    for mth in months:
+        end = mth.to_timestamp(how='end')
+        if end < pd.Timestamp(first_fit):
+            continue
+        hist = Z[Z.index <= end].dropna()
+        if len(hist) < 400:
+            continue
+        sel = (per == mth + 1) & Z.notna().all(axis=1).values
+        if not sel.any():
+            continue
+        mu, sd = hist.mean(), hist.std()
+        km = KMeans(n_clusters=4, n_init=20, random_state=0).fit(((hist - mu) / sd).values)
+        order = np.argsort(km.cluster_centers_[:, 0])
+        remap = {old: new + 1 for new, old in enumerate(order)}
+        lab[sel] = [remap[q] for q in km.predict(((Z[sel] - mu) / sd).values)]
+    return lab
+
+
+def exhaustion_signals(f: pd.DataFrame) -> np.ndarray:
+    """2-6 — 외인 cum20 z60 ≤ −2 후 20거래일 안 3일 연속 순매수 → 신호일 (첫 발생만, 20일 불응기)."""
+    z, net = f['frgn_c20_z'].values, f['frgn_r'].values
+    sig = np.zeros(len(f), bool)
+    i, n = 0, len(f)
+    while i < n:
+        found = None
+        if not np.isnan(z[i]) and z[i] <= -2:
+            run = 0
+            for j in range(i + 1, min(i + 21, n)):
+                run = run + 1 if net[j] > 0 else 0
+                if run == 3:
+                    found = j
+                    break
+        if found is None:
+            i += 1
+            continue
+        sig[found] = True
+        i = found + 20
+    return sig
+
+
+def flows_state(p, kospi_close: pd.Series, with_model: bool = True) -> dict:
+    """브리프·전방 로그용 — P일 3자 수급 상태 (market·block). 사실 정보만."""
+    out = {}
+    aggs = load_aggregates()
+    for univ in ('market', 'block'):
+        a = aggs[univ]
+        a = a[a.index <= pd.Timestamp(p)]
+        f = features(a)
+        last = f.index[-1]
+        r = f.iloc[-1]
+        st = {'date': last.date(), 'pat_cum20': r['pat_cum20'], 'pat_name': pattern_name(r['pat_cum20']),
+              'str_cum20': r['str_cum20'], 'pat_daily': r['pat_daily'],
+              'pat_daily_name': pattern_name(r['pat_daily']), 'str_daily': r['str_daily'],
+              'absorb': None if np.isnan(r['absorb']) else float(r['absorb']),
+              'absorb20': None if np.isnan(r['absorb20']) else float(r['absorb20']),
+              'frgn20_eok': float(r['frgn_c20_amt']) / 100,
+              'exhaustion_signal': bool(exhaustion_signals(f)[-1])}
+        if with_model:
+            try:
+                st['cluster'] = cluster_labels(f, only_last=True).iloc[-1]
+                st['cluster'] = None if np.isnan(st['cluster']) else int(st['cluster'])
+                tail = f.iloc[-400:]
+                X = external_frame(tail.index, kospi_close)
+                resid, expl = resid_expl(tail['frgn_r'] * 100, X)
+                st['frgn_resid'] = float(resid.iloc[-1]) if not np.isnan(resid.iloc[-1]) else None
+                st['frgn_expl'] = float(expl.iloc[-1]) if not np.isnan(expl.iloc[-1]) else None
+                st['frgn_resid_z'] = float(zprior(resid).iloc[-1])
+                st['frgn_expl_z'] = float(zprior(expl).iloc[-1])
+            except Exception as e:
+                st['model_error'] = str(e)[:80]
+        out[univ] = st
+    return out

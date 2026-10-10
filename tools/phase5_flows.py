@@ -18,7 +18,8 @@ warnings.simplefilter('ignore')
 BASE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(BASE, '..')
 sys.path.insert(0, os.path.join(ROOT, 'automation'))
-from brief.flows3 import ACTORS, PATTERN_NAMES, features, load_aggregates, zprior  # noqa: E402
+from brief.flows3 import (ACTORS, PATTERN_NAMES, cluster_labels, exhaustion_signals,  # noqa: E402
+                          external_frame, features, load_aggregates, resid_expl, zprior)
 
 D = os.path.join(ROOT, 'config', 'data')
 OUT = os.path.join(D, 'verify', 'phase5')
@@ -184,73 +185,23 @@ def run_exhaustion(feats, targets):
         z = f['frgn_c20_z'].values
         net = f['frgn_r'].values
         idx = f.index
-        sig = np.zeros(len(f), bool)
-        i, n = 0, len(f)
-        while i < n:
-            found = None
-            if not np.isnan(z[i]) and z[i] <= -2:
-                run = 0
-                for j in range(i + 1, min(i + 21, n)):
-                    run = run + 1 if net[j] > 0 else 0
-                    if run == 3:
-                        found = j
-                        break
-            if found is None:
-                i += 1
-                continue
-            sig[found] = True
-            rows.append({'univ': univ, 'trigger': idx[i].date(), 'signal': idx[found].date(),
-                         **{f'r{h}': fwd(targets[univ], h).get(idx[found], np.nan) for h in (5, 20, 60)}})
-            i = found + 20                     # 첫 발생만 — 신호 후 20거래일 내 재트리거 무시
+        sig = exhaustion_signals(f)
+        for j in np.where(sig)[0]:
+            rows.append({'univ': univ, 'signal': idx[j].date(),
+                         **{f'r{h}': fwd(targets[univ], h).get(idx[j], np.nan) for h in (5, 20, 60)}})
         for h in (5, 20, 60):
             r = fwd(targets[univ], h).reindex(idx).values
             cond_cell('2-6', univ, '외인 매도 종료(z≤−2 후 3일 연속 순매수)', f'r{h}', sig, r, idx, h)
     pd.DataFrame(rows).to_csv(os.path.join(OUT, 'exhaustion_events.csv'), index=False, encoding='utf-8-sig')
 
 
-def ecos(stat, item, start='20130101'):
-    import requests
-    key = os.environ['ECOS_KEY']
-    js = requests.get(f'https://ecos.bok.or.kr/api/StatisticSearch/{key}/json/kr/1/9000/'
-                      f'{stat}/D/{start}/{pd.Timestamp.now():%Y%m%d}/{item}', timeout=120).json()
-    s = pd.Series({pd.Timestamp(r['TIME']): float(r['DATA_VALUE']) for r in js['StatisticSearch']['row']})
-    return s.sort_index()
-
-
 def run_external(feats, targets):
-    import yfinance as yf
-    usd = ecos('731Y003', '0000003').pct_change() * 100
-    jpy = ecos('731Y001', '0000002').pct_change() * 100
-
-    def us_prev(sym, diff):
-        h = yf.Ticker(sym).history(period='max', interval='1d')['Close']
-        h.index = pd.DatetimeIndex(h.index).tz_localize(None).normalize()
-        h = h[~h.index.duplicated()]
-        v = (h.diff() * 100) if diff else (h.pct_change() * 100)
-        return v
-    sox, tnx = us_prev('^SOX', False), us_prev('^TNX', True)
-    kospi_ret = targets['market'].pct_change() * 100
     out = {}
     for univ in ('market', 'block'):
         f = feats[univ]
         idx = f.index
-        X = pd.DataFrame({
-            'usd': usd.reindex(idx), 'jpy': jpy.reindex(idx),
-            'sox': [sox.asof(d - timedelta(days=1)) for d in idx],
-            'tnx': [tnx.asof(d - timedelta(days=1)) for d in idx],
-            'kospi_prev': kospi_ret.shift(1).reindex(idx)}, index=idx)
-        y = f['frgn_r'] * 100
-        fit_hat = pd.Series(np.nan, index=idx)
-        Xv, yv = X.values, y.values
-        for i in range(250, len(idx)):
-            Xw, yw = Xv[i - 250:i], yv[i - 250:i]
-            ok = ~(np.isnan(Xw).any(axis=1) | np.isnan(yw))
-            if ok.sum() < 150 or np.isnan(Xv[i]).any():
-                continue
-            A = np.column_stack([np.ones(ok.sum()), Xw[ok]])
-            b, *_ = np.linalg.lstsq(A, yw[ok], rcond=None)
-            fit_hat.iloc[i] = b[0] + Xv[i] @ b[1:]
-        resid = y - fit_hat
+        X = external_frame(idx, targets['market'])
+        resid, fit_hat = resid_expl(f['frgn_r'] * 100, X)
         out[univ] = {'resid': resid, 'expl': fit_hat}
         rz, ez = zprior(resid), zprior(fit_hat)
         for cond, m in (('잔차 z≤−1 (설명 안 되는 매도)', (rz <= -1).values),
@@ -276,29 +227,10 @@ def run_external(feats, targets):
 
 
 def run_cluster(feats, targets):
-    from sklearn.cluster import KMeans
     eta_rows = []
     for univ in ('market', 'block'):
         f = feats[univ]
-        Z = f[['frgn_c20_z', 'orgn_c20_z']]
-        lab = pd.Series(np.nan, index=f.index)
-        months = pd.DatetimeIndex(f.index).to_period('M').unique()
-        for mth in months:
-            end = mth.to_timestamp(how='end')
-            if end < pd.Timestamp('2016-06-30'):
-                continue
-            hist = Z[Z.index <= end].dropna()
-            if len(hist) < 400:
-                continue
-            mu, sd = hist.mean(), hist.std()
-            km = KMeans(n_clusters=4, n_init=20, random_state=0).fit(((hist - mu) / sd).values)
-            order = np.argsort(km.cluster_centers_[:, 0])
-            remap = {old: new + 1 for new, old in enumerate(order)}
-            nxt = (mth + 1)
-            sel = (pd.DatetimeIndex(Z.index).to_period('M') == nxt) & Z.notna().all(axis=1).values
-            if sel.any():
-                pred = km.predict(((Z[sel] - mu) / sd).values)
-                lab[sel] = [remap[p] for p in pred]
+        lab = cluster_labels(f)
         idx = f.index
         for c in (1, 2, 3, 4):
             m = (lab == c).values

@@ -32,9 +32,9 @@ def _num(s):
         return float('nan')
 
 
-async def fetch(code, token, kreq, config) -> pd.DataFrame:
+async def fetch(code, token, kreq, config, pages: int = 40) -> pd.DataFrame:
     rows, dt = {}, datetime.now().strftime('%Y%m%d')
-    for _ in range(40):
+    for _ in range(pages):
         got = []
         for attempt in range(3):
             try:
@@ -85,6 +85,24 @@ async def main() -> int:
     codes = sorted({str(x['stk_cd']).strip() for x in rows66} & univ)
     os.makedirs(OUT_DIR, exist_ok=True)
     done = {f[:-8] for f in os.listdir(OUT_DIR) if f.endswith('.parquet')}
+    if '--update' in sys.argv:
+        # 일일 갱신 — 기존 종목은 최근 1페이지(약 100거래일) 병합, 신규 상장은 전체 수집
+        n_new = 0
+        for i, code in enumerate(codes):
+            path = os.path.join(OUT_DIR, f'{code}.parquet')
+            if code in done:
+                old = pd.read_parquet(path)
+                recent = await fetch(code, token, kreq, config, pages=1)
+                df = pd.concat([old[~old.index.isin(recent.index)], recent]).sort_index()
+            else:
+                df = await fetch(code, token, kreq, config)
+                n_new += 1
+            df.to_parquet(path)
+            if (i + 1) % 300 == 0:
+                token = await get_semi_token()
+        last = pd.read_parquet(os.path.join(OUT_DIR, '005930.parquet')).index.max().date()
+        print(f'[flows3 update] {datetime.now():%m-%d %H:%M} {len(codes)}종목 (신규 {n_new}) | 최신 {last}', flush=True)
+        return 0
     todo = [c for c in codes if c not in done]
     print(f'[flows3] KOSPI 주권 {len(codes)} | 남은 {len(todo)}', flush=True)
     for i, code in enumerate(todo):
