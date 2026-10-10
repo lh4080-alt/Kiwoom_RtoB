@@ -220,7 +220,9 @@ def upsert_daily_record(record: dict, path: str = None):
         if r.get('date') == record['date']:
             merged = dict(r)
             for k, v in record.items():
-                if v is not None:
+                if k == 'invalid' and isinstance(v, dict):      # 무효 플래그는 합집합 — 기존 플래그 보존
+                    merged[k] = {**(r.get('invalid') or {}), **v}
+                elif v is not None:
                     merged[k] = v
             rows[i] = merged
             break
@@ -651,6 +653,19 @@ async def run_daily(token: str, today_iso: str = None) -> dict:
         record['axes_signal'] = f_rec.get('signal_mu_sox')
     except Exception:
         logger.exception('[macro] 4축·전방 로그 실패 — 무영향')
+    # 미확정 값 무효 플래그 (2026-10-10 Lee 지시) — 값은 그대로 두고 계산에서만 제외.
+    # 20시 전 ka10081 당일 봉 종가는 최종 종가가 아님 (9/14~10/8 기록 역산: 16:50 수집분 전부 불일치,
+    # 20:25·23:18 수집분 일치). 섹터 ETF는 불일치 없음 → 삼전·하닉과 그 파생만.
+    inv = {}
+    if datetime.now().hour < 20:
+        why = f"20시 전 수집({datetime.now():%H:%M}) — 당일 봉 미확정 종가"
+        for fld in ('semis_detail', 'semis_ret', 'rotation_spread'):
+            if record.get(fld) is not None:
+                inv[fld] = why
+    if record.get('breadth'):
+        inv['breadth'] = 'MDC 패널 정의(무수정주가·ETF 포함) — 폐기 정의, k81 패널로 대체'
+    if inv:
+        record['invalid'] = inv
     # 국면 계산에 실제 사용한 마지막 봉 — §8 창 지연 감지용 (10/6 사고 계기)
     if kospi_closes:
         record['kospi_closes_last'] = max(kospi_closes.keys())

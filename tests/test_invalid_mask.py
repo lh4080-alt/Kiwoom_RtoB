@@ -34,3 +34,12 @@ def test_raw_and_disk_preserved(tmp_path):
     upsert_daily_record({'date': '20261001', 'kospi_ret': 1.95}, path=p)   # 쓰기 경로는 원본 기준
     raw = json.loads(open(p, encoding='utf-8').readline())
     assert raw['foreign_net_eok'] == -4165 and raw['invalid'] == {'foreign_net_eok': 'x'}
+
+
+def test_upsert_unions_invalid(tmp_path):
+    p = str(tmp_path / 't.jsonl')
+    _write(p, [{'date': '20261001', 'semis_ret': 1.0, 'invalid': {'foreign_net_eok': 'x'}}])
+    upsert_daily_record({'date': '20261001', 'invalid': {'semis_ret': 'y'}}, path=p)
+    raw = json.loads(open(p, encoding='utf-8').readline())
+    assert raw['invalid'] == {'foreign_net_eok': 'x', 'semis_ret': 'y'}
+    assert load_history(p)[0]['semis_ret'] is None
