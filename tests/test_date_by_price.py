@@ -29,3 +29,15 @@ def test_mismatch_or_too_few():    # 미확정 종가·종목 부족 → 기록 
 def test_ambiguous():              # 두 날 종가가 같으면 판정 불가
     cl = {'005930': {'a': 1, 'b': 1}, '000660': {'a': 2, 'b': 2}}
     assert date_by_price({'005930': 1, '000660': 2}, cl, CODES, ['a', 'b']) is None
+
+
+def test_consecutive_equal_closes_not_recorded():   # Lee 보완 — 연속 두 날 종가가 같아 둘 다 일치하면 미기록
+    cl = {'005930': {'20261007': 269000, '20261008': 269000},
+          '000660': {'20261007': 1715000, '20261008': 1715000}}
+    assert date_by_price({'005930': 269000, '000660': 1715000}, cl, CODES, CAND) is None
+
+
+def test_one_code_equal_still_unique():              # 한 종목만 두 날 같으면 다른 종목으로 판정
+    cl = {'005930': {'20261007': 269000, '20261008': 269000},
+          '000660': {'20261007': 1715000, '20261008': 1686000}}
+    assert date_by_price({'005930': 269000, '000660': 1686000}, cl, CODES, CAND) == '20261008'

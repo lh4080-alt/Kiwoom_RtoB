@@ -59,6 +59,10 @@ def run_checks(cross_alerts: list = None) -> dict:
     sys.path.insert(0, BASE)
     from macro_monitor import JSONL_PATH, load_history
     alerts = _selftest() + list(cross_alerts or [])
+    try:
+        alerts += buyback_disclosure_check()
+    except Exception as e:
+        alerts.append(f'자사주 공시 감시 실패: {str(e)[:60]}')
     hist = load_history(raw=True)   # 기록기 건강 점검 — 무효 가림 없이
     now = datetime.now().isoformat(timespec='seconds')
 
@@ -270,4 +274,30 @@ def market_flow_crosscheck(p, k51_row: dict, sum_frgn_eok, naver: dict) -> list:
             alerts.append(f"대조: 외인 ka10051 {fn:+,.0f} vs 네이버 {naver['frgn']:+,.0f}억")
         if abs(k51_row['ind'] - naver['ind']) > NAVER_TOL_IND:
             alerts.append(f"대조: 개인 ka10051 {k51_row['ind']:+,.0f} vs 네이버 {naver['ind']:+,.0f}억")
+    return alerts
+
+
+# ── 자사주 취득 공시 감시 (2026-10-10 Lee 지시 — 알림만, 설정 자동 수정 없음) ──
+BUYBACK_LOOKBACK_DAYS = 120
+
+
+def buyback_disclosure_check(codes=('005930', '000660')) -> list:
+    """네이버 공시에서 '자기주식 … 취득 … 결정'(신탁계약 포함) 중 brief_config.BUYBACK_PERIODS에 없는 것 → 알림."""
+    import requests
+    import brief_config as cfg
+    known = {b.get('disclosure_id') for b in cfg.BUYBACK_PERIODS}
+    cutoff = (datetime.now() - pd.Timedelta(days=BUYBACK_LOOKBACK_DAYS)).strftime('%Y-%m-%d')
+    alerts = []
+    for c in codes:
+        try:
+            js = requests.get(f'https://m.stock.naver.com/api/stock/{c}/disclosure?pageSize=100&page=1',
+                              headers={'User-Agent': 'Mozilla/5.0'}, timeout=20).json()
+        except Exception as e:
+            alerts.append(f'자사주 공시 확인 실패 {c}: {str(e)[:40]}')
+            continue
+        for x in js if isinstance(js, list) else []:
+            t, d = x.get('title') or '', str(x.get('datetime', ''))[:10]
+            if '자기주식' in t and '취득' in t and '결정' in t and d >= cutoff                     and x.get('disclosureId') not in known:
+                alerts.append(f"자사주 신규 공시 {c} {d} '{t}' (id {x.get('disclosureId')}) — "
+                              'brief_config.BUYBACK_PERIODS 미등록')
     return alerts

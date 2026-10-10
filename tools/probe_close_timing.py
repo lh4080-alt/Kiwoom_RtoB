@@ -3,6 +3,8 @@
 
 시각별로 ka10081 당일 봉 종가(KRX 무접미사·_NX·_AL)와 ka10066 cur_prc를 기록한다.
 목적: 16:50 기록값이 최종 종가와 달랐던 원인 확정 + 20:30 실행 시 확정값·ka10066 날짜 확인.
+기간: 10/12~10/16 5거래일 (Lee 보완 — 오류가 특정 기간에 몰려 하루로는 재현 안 될 수 있음, 연휴 직후 포함).
+수정주가 구분(upd_stkpc_tp) 0·1을 모두 기록 — 시각·거래소로 설명 안 되면 다음 후보.
 출력: config/data/verify/close_timing_probe.jsonl (읽기·기록 외 동작 없음)
 """
 import asyncio
@@ -26,13 +28,16 @@ async def main() -> int:
     today = datetime.now().strftime('%Y%m%d')
     rec = {'at': datetime.now().isoformat(timespec='seconds'), 'k81': {}, 'k66': {}}
     for c in CODES:
-        for suf in ('', '_NX', '_AL'):
+        for suf, upd in (('', '1'), ('', '0'), ('_NX', '1'), ('_AL', '1')):
+            key = f'{c}{suf}|upd{upd}'
             try:
-                r = await fn_ka10081(c + suf, base_dt=today, token=t, silent=True)
-                top = (r.get('candles') or [{}])[0]
-                rec['k81'][c + suf] = {'date': str(top.get('date')), 'close': top.get('close')}
+                r = await fn_ka10081(c + suf, base_dt=today, upd_stkpc_tp=upd, token=t, silent=True)
+                cs = r.get('candles') or [{}]
+                rec['k81'][key] = {'date': str(cs[0].get('date')), 'close': cs[0].get('close'),
+                                   'prev_date': str(cs[1].get('date')) if len(cs) > 1 else None,
+                                   'prev_close': cs[1].get('close') if len(cs) > 1 else None}
             except Exception as e:
-                rec['k81'][c + suf] = {'error': str(e)[:60]}
+                rec['k81'][key] = {'error': str(e)[:60]}
     try:
         rows, cont, nk = [], 'N', ''
         for _ in range(40):
