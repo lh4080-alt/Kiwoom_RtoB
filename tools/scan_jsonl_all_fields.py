@@ -58,7 +58,7 @@ async def ka10059_frgn(token, code: str) -> pd.Series:
 
 
 async def main() -> int:
-    from macro_monitor import JSONL_PATH, compute_regime
+    from macro_monitor import JSONL_PATH, compute_regime, OTHER_ETFS
     from modules.semi_trigger.token_provider import get_semi_token
     token = await get_semi_token()
     k = pd.read_parquet(os.path.join(D, 'kospi_daily_ohlc.parquet'))['close'].astype(float)
